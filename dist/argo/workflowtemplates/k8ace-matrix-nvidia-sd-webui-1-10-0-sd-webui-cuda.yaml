@@ -1,0 +1,118 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+    name: k8ace-matrix-nvidia-sd-webui-1-10-0-sd-webui-cuda
+    namespace: default
+spec:
+    entrypoint: main
+    serviceAccountName: argo-workflow
+    templates:
+        - name: main
+          dag:
+            tasks:
+                - name: base-image-nvidia-cuda-base-cuda12-4-devel-ubuntu22-04
+                  template: kaniko
+                  arguments:
+                    parameters:
+                        - name: context
+                          value: .
+                        - name: dockerfile
+                          value: dockerfiles/base_image/nvidia/cuda_base/cuda12.4-devel-ubuntu22.04/Dockerfile
+                        - name: destination
+                          value: k8ace/cuda_base-cuda12.4-devel-ubuntu22.04
+                        - name: extraArgs
+                          value: --cache=true --cache-repo=k8ace/cache/nvidia/base_image --build-arg=BASE_IMAGE=nvidia/cuda:cuda12.4-devel-ubuntu22.04
+                        - name: kanikoImage
+                          value: gcr.io/kaniko-project/executor:latest
+                - name: app-image-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                  template: kaniko
+                  dependencies:
+                    - base-image-nvidia-cuda-base-cuda12-4-devel-ubuntu22-04
+                  arguments:
+                    parameters:
+                        - name: context
+                          value: .
+                        - name: dockerfile
+                          value: dockerfiles/app_image/nvidia/sd_webui/1.10.0/sd-webui-cuda/Dockerfile
+                        - name: destination
+                          value: k8ace/sd_webui1.10.0-nvidia-sd-webui-cuda-dev
+                        - name: extraArgs
+                          value: --cache=true --cache-repo=k8ace/cache/nvidia/app_image --build-arg=BASE_IMAGE=k8ace/cuda_base-cuda12.4-devel-ubuntu22.04 --build-arg=GPU_ARCH=all --build-arg=NVCC_FLAGS=-gencode arch=compute_70,code=sm_70 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_90,code=sm_90
+                        - name: kanikoImage
+                          value: gcr.io/kaniko-project/executor:latest
+                - name: host-driver-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                  template: kaniko
+                  dependencies:
+                    - app-image-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                  arguments:
+                    parameters:
+                        - name: context
+                          value: .
+                        - name: dockerfile
+                          value: dockerfiles/host_driver/noop/Dockerfile
+                        - name: destination
+                          value: k8ace/noop-host-driver-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                        - name: extraArgs
+                          value: --cache=true --cache-repo=k8ace/cache/nvidia/host_driver --no-push --build-arg=BASE_IMAGE=alpine:3.20
+                        - name: kanikoImage
+                          value: gcr.io/kaniko-project/executor:latest
+                - name: test-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                  template: kaniko
+                  dependencies:
+                    - host-driver-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                  arguments:
+                    parameters:
+                        - name: context
+                          value: .
+                        - name: dockerfile
+                          value: dockerfiles/test/noop/Dockerfile
+                        - name: destination
+                          value: k8ace/noop-test-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                        - name: extraArgs
+                          value: --cache=true --cache-repo=k8ace/cache/nvidia/test --no-push --build-arg=BASE_IMAGE=alpine:3.20
+                        - name: kanikoImage
+                          value: gcr.io/kaniko-project/executor:latest
+                - name: push-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                  template: kaniko
+                  dependencies:
+                    - test-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                  arguments:
+                    parameters:
+                        - name: context
+                          value: .
+                        - name: dockerfile
+                          value: dockerfiles/push/noop/Dockerfile
+                        - name: destination
+                          value: k8ace/noop-push-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                        - name: extraArgs
+                          value: --cache=true --cache-repo=k8ace/cache/nvidia/push --no-push --build-arg=BASE_IMAGE=alpine:3.20
+                        - name: kanikoImage
+                          value: gcr.io/kaniko-project/executor:latest
+        - name: kaniko
+          container:
+            image: '{{inputs.parameters.kanikoImage}}'
+            command:
+                - /kaniko/executor
+            args:
+                - --context={{inputs.parameters.context}}
+                - --dockerfile={{inputs.parameters.dockerfile}}
+                - --destination={{inputs.parameters.destination}}
+                - '{{inputs.parameters.extraArgs}}'
+            volumeMounts:
+                - name: registry-config
+                  mountPath: /kaniko/.docker
+                  readOnly: true
+          inputs:
+            parameters:
+                - name: context
+                - name: dockerfile
+                - name: destination
+                - name: extraArgs
+                - name: kanikoImage
+    volumes:
+        - name: registry-config
+          secret:
+            secretName: registry-credentials
+            items:
+                - key: .dockerconfigjson
+                  path: config.json

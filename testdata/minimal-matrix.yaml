@@ -1,0 +1,63 @@
+schema_version: "1.0"
+project: "k8ace-matrix"
+registry_prefix: "k8ace"
+
+build_pipeline:
+  stages:
+    - name: "base_image"
+      description: "base"
+      parallel: true
+      matrix_dimension: "base"
+    - name: "app_image"
+      description: "app"
+      parallel: true
+      matrix_dimension: "app"
+      depends_on: ["base_image"]
+  cache:
+    type: "registry"
+    ttl: "168h"
+    key_template: "k8ace/cache/{{ .Hardware.Vendor }}/{{ .Stage.Name }}/{{ .Checksum }}"
+
+base_image_matrix:
+  cuda_base:
+    source: "nvidia/cuda"
+    variants:
+      - tag_suffix: "cuda12.4-devel-ubuntu22.04"
+        cuda_version: "12.4"
+        ubuntu_version: "22.04"
+        python_version: "3.10"
+        k8ace_compatible: ["nvidia"]
+
+application_matrix:
+  deep_learning:
+    pytorch:
+      versions: ["2.5.1"]
+      variants:
+        - name: "pytorch-cuda"
+          base_ref: "cuda_base"
+          hardware: ["nvidia"]
+          additional_packages: ["torch==${version}", "torchvision", "torchaudio"]
+          build_args:
+            PYTORCH_VERSION: "${version}"
+            CUDA_VERSION: "${base.cuda_version}"
+
+build_args_overrides:
+  nvidia:
+    BASE_IMAGE: "nvidia/cuda:cuda12.4-devel-ubuntu22.04"
+
+priority_build_list:
+  tier2_frameworks:
+    - "k8ace/pytorch2.5.1-nvidia-cuda12.4"
+
+naming_convention:
+  template: "{{ .RegistryPrefix }}/{{ .AppName }}-{{ .Hardware.Vendor }}-{{ .VersionSuffix }}"
+
+ci_cd:
+  argo_workflows:
+    namespace: "default"
+    service_account: "argo-workflow"
+    kaniko_image: "kaniko:test"
+    registry_secret_name: "regcred"
+    cache:
+      enabled: true
+      repo_template: "{{ .RegistryPrefix }}/cache/{{ .Hardware }}/{{ .Stage }}"

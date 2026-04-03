@@ -1,0 +1,68 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+    name: k8ace-matrix-nvidia
+spec:
+    entrypoint: main
+    templates:
+        - name: main
+          dag:
+            tasks:
+                - name: base-image-nvidia-cuda-base-cuda12-4-devel-ubuntu22-04
+                  template: kaniko
+                  arguments:
+                    parameters:
+                        - name: context
+                          value: .
+                        - name: dockerfile
+                          value: dockerfiles/base_image/nvidia/cuda_base/cuda12.4-devel-ubuntu22.04/Dockerfile
+                        - name: destination
+                          value: k8ace/cuda_base-cuda12.4-devel-ubuntu22.04
+                        - name: extraArgs
+                          value: --cache=true --cache-repo=k8ace/cache/nvidia/base_image --build-arg=BASE_IMAGE=nvidia/cuda:cuda12.4-devel-ubuntu22.04
+                        - name: kanikoImage
+                          value: kaniko:test
+                - name: app-image-nvidia-pytorch-2-5-1-pytorch-cuda
+                  template: kaniko
+                  dependencies:
+                    - base-image-nvidia-cuda-base-cuda12-4-devel-ubuntu22-04
+                  arguments:
+                    parameters:
+                        - name: context
+                          value: .
+                        - name: dockerfile
+                          value: dockerfiles/app_image/nvidia/pytorch/2.5.1/pytorch-cuda/Dockerfile
+                        - name: destination
+                          value: k8ace/pytorch2.5.1-nvidia-pytorch-cuda-dev
+                        - name: extraArgs
+                          value: --cache=true --cache-repo=k8ace/cache/nvidia/app_image --build-arg=BASE_IMAGE=k8ace/cuda_base-cuda12.4-devel-ubuntu22.04 --build-arg=CUDA_VERSION=12.4 --build-arg=PYTORCH_VERSION=2.5.1
+                        - name: kanikoImage
+                          value: kaniko:test
+        - name: kaniko
+          container:
+            image: '{{inputs.parameters.kanikoImage}}'
+            command:
+                - /kaniko/executor
+            args:
+                - --context={{inputs.parameters.context}}
+                - --dockerfile={{inputs.parameters.dockerfile}}
+                - --destination={{inputs.parameters.destination}}
+                - '{{inputs.parameters.extraArgs}}'
+            volumeMounts:
+                - name: registry-config
+                  mountPath: /kaniko/.docker
+                  readOnly: true
+          inputs:
+            parameters:
+                - name: context
+                - name: dockerfile
+                - name: destination
+                - name: extraArgs
+                - name: kanikoImage
+    volumes:
+        - name: registry-config
+          secret:
+            secretName: regcred
+            items:
+                - key: .dockerconfigjson
+                  path: config.json
