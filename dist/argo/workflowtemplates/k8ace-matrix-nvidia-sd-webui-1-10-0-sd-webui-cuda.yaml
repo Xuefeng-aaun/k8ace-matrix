@@ -34,7 +34,7 @@ spec:
             command:
                 - /kaniko/executor
             args:
-                - --context=.
+                - --context=git://github.com/Xuefeng-aaun/k8ace-matrix.git#refs/heads/main
                 - --dockerfile=dockerfiles/base_image/nvidia/cuda_base/cuda12.4-devel-ubuntu22.04/Dockerfile
                 - --destination=xuefengaaun/k8ace/cuda_base-cuda12.4-devel-ubuntu22.04
                 - --cache=true
@@ -50,7 +50,7 @@ spec:
             command:
                 - /kaniko/executor
             args:
-                - --context=.
+                - --context=git://github.com/Xuefeng-aaun/k8ace-matrix.git#refs/heads/main
                 - --dockerfile=dockerfiles/app_image/nvidia/sd_webui/1.10.0/sd-webui-cuda/Dockerfile
                 - --destination=xuefengaaun/k8ace/sd_webui1.10.0-nvidia-sd-webui-cuda-dev
                 - --cache=true
@@ -68,7 +68,7 @@ spec:
             command:
                 - /kaniko/executor
             args:
-                - --context=.
+                - --context=git://github.com/Xuefeng-aaun/k8ace-matrix.git#refs/heads/main
                 - --dockerfile=dockerfiles/host_driver/noop/Dockerfile
                 - --destination=xuefengaaun/k8ace/noop-host-driver-nvidia-sd-webui-1-10-0-sd-webui-cuda
                 - --cache=true
@@ -85,7 +85,7 @@ spec:
             command:
                 - /kaniko/executor
             args:
-                - --context=.
+                - --context=git://github.com/Xuefeng-aaun/k8ace-matrix.git#refs/heads/main
                 - --dockerfile=dockerfiles/test/noop/Dockerfile
                 - --destination=xuefengaaun/k8ace/noop-test-nvidia-sd-webui-1-10-0-sd-webui-cuda
                 - --cache=true
@@ -102,7 +102,7 @@ spec:
             command:
                 - /kaniko/executor
             args:
-                - --context=.
+                - --context=git://github.com/Xuefeng-aaun/k8ace-matrix.git#refs/heads/main
                 - --dockerfile=dockerfiles/push/noop/Dockerfile
                 - --destination=xuefengaaun/k8ace/noop-push-nvidia-sd-webui-1-10-0-sd-webui-cuda
                 - --cache=true
