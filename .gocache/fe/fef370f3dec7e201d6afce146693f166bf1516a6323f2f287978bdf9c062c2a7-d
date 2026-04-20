@@ -1,0 +1,12 @@
+./amd_cdna2.go
+./amd_cdna3.go
+./ascend_ascend.go
+./builtin.go
+./cambricon_mlu.go
+./cpu_generic.go
+./hygon_dcu_gen1.go
+./hygon_dcu_gen2.go
+./intel_xehpg.go
+./nvidia_ampere.go
+./nvidia_hopper.go
+./types.go

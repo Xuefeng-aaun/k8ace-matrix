@@ -1,0 +1,24 @@
+# test log
+getenv GOTMPDIR
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\base_image\nvidia\cuda_base\cuda12.4-devel-ubuntu22.04
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\base_image\nvidia\cuda_base
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\base_image\nvidia
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\base_image
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001
+open E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\base_image\nvidia\cuda_base\cuda12.4-devel-ubuntu22.04\Dockerfile
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\app_image\nvidia\pytorch\2.5.1\pytorch-cuda
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\app_image\nvidia\pytorch\2.5.1
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\app_image\nvidia\pytorch
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\app_image\nvidia
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\app_image
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles
+open E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\app_image\nvidia\pytorch\2.5.1\pytorch-cuda\Dockerfile
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\test\noop
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\test
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles
+open E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\test\noop\Dockerfile
+open E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\base_image\nvidia\cuda_base\cuda12.4-devel-ubuntu22.04\Dockerfile
+open E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\app_image\nvidia\pytorch\2.5.1\pytorch-cuda\Dockerfile
+stat E:\docker\images\images\.gotmp\TestWriteDockerfiles2608353884\001\dockerfiles\test\noop\Dockerfile
+open E:\docker\images\images\.gotmp

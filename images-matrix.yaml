@@ -7,7 +7,7 @@
 
 schema_version: "1.0"
 project: "k8ace-matrix"
-registry_prefix: "k8ace"
+registry_prefix: "xuefengaaun/k8ace"
 
 # =============================================================================
 # 一、加速卡硬件矩阵定义 (Hardware Matrix)

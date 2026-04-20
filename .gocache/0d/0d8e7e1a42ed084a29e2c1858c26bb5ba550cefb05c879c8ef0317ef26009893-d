@@ -1,0 +1,7 @@
+./config.go
+./main.go
+./render.go
+./root.go
+./scaffold.go
+./submit.go
+./util.go

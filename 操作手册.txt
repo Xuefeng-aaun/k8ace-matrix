@@ -1,0 +1,100 @@
+操作手册：验证并修复 matrix-ci 渲染 Kaniko 参数的问题
+
+1. 结论
+
+已验证，文档描述的现象是真问题：
+
+- 旧版渲染结果会把多个 Kaniko flag 拼成一个字符串，再作为单个 `args[]` 元素传入容器。
+- Kaniko 要求 `--cache=true`、`--cache-repo=...`、`--build-arg=...` 等都必须是独立的命令行参数。
+- 因此旧版 YAML 会触发类似下面的报错：
+
+```text
+Error: invalid argument "true --cache-repo=... --build-arg=..." for "--cache" flag
+```
+
+但原 AI 文档给出的修复方案只有一半是对的：
+
+- “根因是参数被拼成一个字符串”这个判断是对的。
+- “把 `extraArgs` 改成数组参数，再在模板里 `range` 展开”这个方案不适合当前项目。
+
+2. 为什么原文档方案不可直接采用
+
+当前项目的 YAML 生成方式是 Go 结构体加 `yaml.Marshal`，不是先生成一层模板、再交给额外模板引擎做二次展开。
+
+这意味着下面这类写法并不能像文档假设的那样工作：
+
+```yaml
+{{- range $arg := inputs.parameters.extraArgs }}
+- {{ $arg }}
+{{- end }}
+```
+
+另外，Argo 的 `Parameter` 也不是可以随意塞一个 `items` 数组的自由结构。把：
+
+```yaml
+parameters:
+  - name: extraArgs
+    items:
+      - --cache=true
+```
+
+写进最终 WorkflowTemplate，本身就不是当前问题的可靠修法。
+
+3. 本项目采用的实际修复方案
+
+采用更直接、也更符合 Argo/Kaniko 运行方式的方案：
+
+- 不再把 `extraArgs` 作为任务参数传给共享的 `kaniko` 模板。
+- 改为给每个 DAG task 直接生成一个独立的 Kaniko 容器模板。
+- 在生成 YAML 时就把完整的 `args[]` 展开成多个独立字符串，例如：
+
+```yaml
+args:
+  - --context=.
+  - --dockerfile=dockerfiles/base_image/nvidia/cuda_base/cuda12.4-devel-ubuntu22.04/Dockerfile
+  - --destination=k8ace/cuda_base-cuda12.4-devel-ubuntu22.04
+  - --cache=true
+  - --cache-repo=k8ace/cache/nvidia/base_image
+  - --build-arg=BASE_IMAGE=nvidia/cuda:cuda12.4-devel-ubuntu22.04
+```
+
+这样 Kaniko 收到的就是合法参数数组，不再需要在 Argo 里做“字符串转数组”的二次处理。
+
+4. 已修改的内容
+
+已调整以下部分：
+
+- `internal/argo/render/workflow.go`
+  - `main` DAG 仅保留依赖关系。
+  - 每个任务改为引用自己的模板名。
+  - 新增按任务直接渲染完整 Kaniko `args[]` 的逻辑。
+- `internal/argo/render/types.go`
+  - 移除之前为 `extraArgs` 伪造的 `items` 字段，避免生成无效参数结构。
+- `testdata/workflowtemplate.golden.yaml`
+  - 同步为新的合法输出格式。
+- `dist/argo/workflowtemplates/k8ace-matrix-nvidia-sd-webui-1-10-0-sd-webui-cuda.yaml`
+  - 同步刷新为新的渲染结果。
+
+5. 如何继续验证
+
+建议在具备 Go 环境的机器上执行：
+
+```bash
+go test ./...
+```
+
+如果需要重新生成产物，可执行：
+
+```bash
+matrix-ci render --out-dir dist/argo
+```
+
+验证重点：
+
+- 每个 Kaniko 参数都应是 `args` 数组里的单独元素。
+- 不应再出现 `extraArgs: "--cache=true ..."` 这种拼接字符串形式。
+- 不应再出现给 Argo `Parameter` 传 `items:` 的做法。
+
+6. 当前剩余说明
+
+我已经完成代码和产物修正，但当前终端环境里 `go` 不在 PATH 中，因此还没有在本机实际跑通 `go test ./...`。如果后续补齐 Go 环境，优先执行测试和一次真实的 `render` 回归即可。
