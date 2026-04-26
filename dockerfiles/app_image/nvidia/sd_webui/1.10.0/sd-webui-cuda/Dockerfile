@@ -1,9 +1,22 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG NO_PROXY=
+ARG http_proxy=
+ARG https_proxy=
+ARG no_proxy=
 ARG SD_WEBUI_REPO=https://github.com/AUTOMATIC1111/stable-diffusion-webui.git
 ARG SD_WEBUI_REF=master
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy} \
+    no_proxy=${no_proxy}
 
 ENV SD_WEBUI_ROOT=/opt/sd-webui
 

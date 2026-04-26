@@ -91,12 +91,25 @@ func BuildPlans(m *matrix.Matrix, sel Selection) ([]*Plan, error) {
 		}
 	}
 
+	builder := strings.TrimSpace(sel.Builder)
+	if builder == "" {
+		builder = "kaniko"
+	}
+	if !strings.EqualFold(builder, "kaniko") {
+		return nil, fmt.Errorf("unsupported builder: %s", sel.Builder)
+	}
+
 	units, err := DeriveUnits(m, sel)
 	if err != nil {
 		return nil, err
 	}
 
-	orderedStages, err := orderedStages(m, sel.Stages)
+	resolvedStages, err := resolveStages(m, sel.Stages)
+	if err != nil {
+		return nil, err
+	}
+
+	overrideStageName, overrideDockerfile, err := resolveDockerfileOverride(sel.Stages, sel.Dockerfile)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +122,7 @@ func BuildPlans(m *matrix.Matrix, sel Selection) ([]*Plan, error) {
 		regPrefix = "k8ace"
 	}
 
-	cacheEnabled := strings.EqualFold(m.BuildPipeline.Cache.Type, "registry")
+	cacheEnabled := strings.EqualFold(m.BuildPipeline.Cache.Type, "registry") && m.CICD.ArgoWorkflows.Cache.Enabled
 	cacheRepoTpl := strings.TrimSpace(m.CICD.ArgoWorkflows.Cache.RepoTemplate)
 	if cacheRepoTpl == "" {
 		cacheRepoTpl = "{{ .RegistryPrefix }}/cache/{{ .Hardware }}/{{ .Stage }}"
@@ -123,99 +136,38 @@ func BuildPlans(m *matrix.Matrix, sel Selection) ([]*Plan, error) {
 	var plans []*Plan
 	for _, u := range units {
 		var tasks []Task
+		stageTaskNames := map[string]string{}
+		for _, st := range resolvedStages {
+			taskName := taskNameForStage(st.Name, u)
+			stageTaskNames[st.Name] = taskName
 
-		baseTaskName := sanitizeName(strings.Join([]string{"base-image", u.Hardware, u.BaseRef, u.BaseVariant.TagSuffix}, "-"))
-		baseDockerfile := fmt.Sprintf("dockerfiles/base_image/%s/%s/%s/Dockerfile", u.Hardware, u.BaseRef, u.BaseVariant.TagSuffix)
-		baseArgs := map[string]string{
-			"BASE_IMAGE": u.BaseSourceImage,
+			task := buildStageTask(
+				st.Name,
+				u,
+				sel.KanikoImage,
+				contextDir,
+				regPrefix,
+				cacheEnabled,
+				cacheRepoTpl,
+				m.BuildPipeline.Cache,
+				overrideStageName,
+				overrideDockerfile,
+			)
+			tasks = append(tasks, task)
 		}
 
-		cacheRepo := applyRepoTemplate(cacheRepoTpl, regPrefix, u.Hardware, "base_image")
-
-		tasks = append(tasks, Task{
-			Name:     baseTaskName,
-			Stage:    "base_image",
-			Hardware: u.Hardware,
-			App:      fmt.Sprintf("%s%s-%s", u.AppName, u.AppVersion, u.VariantName),
-			Kaniko: KanikoSpec{
-				Image:       sel.KanikoImage,
-				ContextDir:  contextDir,
-				Dockerfile:  baseDockerfile,
-				Destination: u.BaseImageDest,
-				BuildArgs:   baseArgs,
-				NoPush:      false,
-				Cache: CacheSpec{
-					Enabled:     cacheEnabled,
-					Repo:        cacheRepo,
-					TTL:         m.BuildPipeline.Cache.TTL,
-					KeyTemplate: m.BuildPipeline.Cache.KeyTemplate,
-				},
-			},
-		})
-
-		appTaskName := sanitizeName(strings.Join([]string{"app-image", u.Hardware, u.AppName, u.AppVersion, u.VariantName}, "-"))
-		appDockerfile := fmt.Sprintf("dockerfiles/app_image/%s/%s/%s/%s/Dockerfile", u.Hardware, u.AppName, u.AppVersion, sanitizeName(u.VariantName))
-		appArgs := map[string]string{}
-		for k, v := range u.BuildArgs {
-			appArgs[k] = v
-		}
-		appArgs["BASE_IMAGE"] = u.BaseImageDest
-
-		cacheRepo = applyRepoTemplate(cacheRepoTpl, regPrefix, u.Hardware, "app_image")
-
-		tasks = append(tasks, Task{
-			Name:      appTaskName,
-			Stage:     "app_image",
-			Hardware:  u.Hardware,
-			App:       fmt.Sprintf("%s%s-%s", u.AppName, u.AppVersion, u.VariantName),
-			DependsOn: []string{baseTaskName},
-			Kaniko: KanikoSpec{
-				Image:       sel.KanikoImage,
-				ContextDir:  contextDir,
-				Dockerfile:  appDockerfile,
-				Destination: u.AppImageDest,
-				BuildArgs:   appArgs,
-				NoPush:      false,
-				Cache: CacheSpec{
-					Enabled:     cacheEnabled,
-					Repo:        cacheRepo,
-					TTL:         m.BuildPipeline.Cache.TTL,
-					KeyTemplate: m.BuildPipeline.Cache.KeyTemplate,
-				},
-			},
-		})
-
-		prev := appTaskName
-		for _, st := range orderedStages {
-			if st.Name == "base_image" || st.Name == "app_image" {
-				continue
+		for i := range tasks {
+			stageDef, ok := stageByName(resolvedStages, tasks[i].Stage)
+			if !ok {
+				return nil, fmt.Errorf("stage definition not found: %s", tasks[i].Stage)
 			}
-			taskName := sanitizeName(strings.Join([]string{st.Name, u.Hardware, u.AppName, u.AppVersion, u.VariantName}, "-"))
-			dockerfile := fmt.Sprintf("dockerfiles/%s/noop/Dockerfile", st.Name)
-			cacheRepo = applyRepoTemplate(cacheRepoTpl, regPrefix, u.Hardware, st.Name)
-
-			tasks = append(tasks, Task{
-				Name:      taskName,
-				Stage:     st.Name,
-				Hardware:  u.Hardware,
-				App:       fmt.Sprintf("%s%s-%s", u.AppName, u.AppVersion, u.VariantName),
-				DependsOn: []string{prev},
-				Kaniko: KanikoSpec{
-					Image:       sel.KanikoImage,
-					ContextDir:  contextDir,
-					Dockerfile:  dockerfile,
-					Destination: fmt.Sprintf("%s/noop-%s", regPrefix, taskName),
-					BuildArgs:   map[string]string{"BASE_IMAGE": "alpine:3.20"},
-					NoPush:      true,
-					Cache: CacheSpec{
-						Enabled:     cacheEnabled,
-						Repo:        cacheRepo,
-						TTL:         m.BuildPipeline.Cache.TTL,
-						KeyTemplate: m.BuildPipeline.Cache.KeyTemplate,
-					},
-				},
-			})
-			prev = taskName
+			for _, depName := range stageDef.DependsOn {
+				taskDepName, ok := stageTaskNames[depName]
+				if !ok {
+					return nil, fmt.Errorf("resolved dependency %s not found for stage %s", depName, stageDef.Name)
+				}
+				tasks[i].DependsOn = append(tasks[i].DependsOn, taskDepName)
+			}
 		}
 
 		plans = append(plans, &Plan{
@@ -273,36 +225,176 @@ func planName(sel Selection) string {
 	return base
 }
 
-func orderedStages(m *matrix.Matrix, requested []string) ([]matrix.Stage, error) {
+func resolveStages(m *matrix.Matrix, requested []string) ([]matrix.Stage, error) {
 	if len(m.BuildPipeline.Stages) == 0 {
 		return nil, fmt.Errorf("matrix.build_pipeline.stages is empty")
 	}
 
+	stageDefs := map[string]matrix.Stage{}
+	for _, st := range m.BuildPipeline.Stages {
+		stageDefs[st.Name] = st
+	}
+
 	wantAll := len(requested) == 0 || contains(requested, "all")
-	want := map[string]bool{}
-	for _, s := range requested {
-		want[strings.TrimSpace(s)] = true
+	required := map[string]bool{}
+
+	var collectDeps func(string, map[string]bool) error
+	collectDeps = func(stageName string, visiting map[string]bool) error {
+		if required[stageName] {
+			return nil
+		}
+		st, ok := stageDefs[stageName]
+		if !ok {
+			return fmt.Errorf("stage not found: %s", stageName)
+		}
+		if visiting[stageName] {
+			return fmt.Errorf("cyclic stage dependency detected at %s", stageName)
+		}
+
+		visiting[stageName] = true
+		for _, depName := range st.DependsOn {
+			if err := collectDeps(depName, visiting); err != nil {
+				return err
+			}
+		}
+		delete(visiting, stageName)
+		required[stageName] = true
+		return nil
+	}
+
+	if wantAll {
+		for _, st := range m.BuildPipeline.Stages {
+			required[st.Name] = true
+		}
+	} else {
+		for _, s := range requested {
+			stageName := strings.TrimSpace(s)
+			if stageName == "" {
+				continue
+			}
+			if err := collectDeps(stageName, map[string]bool{}); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	var stages []matrix.Stage
 	for _, st := range m.BuildPipeline.Stages {
-		if wantAll || want[st.Name] {
+		if required[st.Name] {
 			stages = append(stages, st)
 		}
 	}
+
 	if len(stages) == 0 {
 		return nil, fmt.Errorf("no stages selected")
 	}
 
-	index := map[string]int{}
-	for i, st := range m.BuildPipeline.Stages {
-		index[st.Name] = i
-	}
-	sort.SliceStable(stages, func(i, j int) bool {
-		return index[stages[i].Name] < index[stages[j].Name]
-	})
-
 	return stages, nil
+}
+
+func resolveDockerfileOverride(requested []string, dockerfile string) (string, string, error) {
+	dockerfile = strings.TrimSpace(dockerfile)
+	if dockerfile == "" {
+		return "", "", nil
+	}
+
+	var explicit []string
+	for _, s := range requested {
+		stageName := strings.TrimSpace(s)
+		if stageName == "" {
+			continue
+		}
+		if strings.EqualFold(stageName, "all") {
+			return "", "", fmt.Errorf("--dockerfile requires exactly one explicit --stage")
+		}
+		explicit = append(explicit, stageName)
+	}
+	if len(explicit) != 1 {
+		return "", "", fmt.Errorf("--dockerfile requires exactly one explicit --stage")
+	}
+	return explicit[0], dockerfile, nil
+}
+
+func buildStageTask(
+	stageName string,
+	u BuildUnit,
+	kanikoImage string,
+	contextDir string,
+	regPrefix string,
+	cacheEnabled bool,
+	cacheRepoTpl string,
+	buildCache matrix.Cache,
+	overrideStageName string,
+	overrideDockerfile string,
+) Task {
+	taskName := taskNameForStage(stageName, u)
+	cacheRepo := applyRepoTemplate(cacheRepoTpl, regPrefix, u.Hardware, stageName)
+	task := Task{
+		Name:     taskName,
+		Stage:    stageName,
+		Hardware: u.Hardware,
+		App:      fmt.Sprintf("%s%s-%s", u.AppName, u.AppVersion, u.VariantName),
+		Kaniko: KanikoSpec{
+			Image:      kanikoImage,
+			ContextDir: contextDir,
+			Cache: CacheSpec{
+				Enabled:     cacheEnabled,
+				Repo:        cacheRepo,
+				TTL:         buildCache.TTL,
+				KeyTemplate: buildCache.KeyTemplate,
+			},
+		},
+	}
+
+	switch stageName {
+	case "base_image":
+		task.Kaniko.Dockerfile = fmt.Sprintf("dockerfiles/base_image/%s/%s/%s/Dockerfile", u.Hardware, u.BaseRef, u.BaseVariant.TagSuffix)
+		task.Kaniko.Destination = u.BaseImageDest
+		task.Kaniko.BuildArgs = map[string]string{}
+		for k, v := range u.BaseBuildArgs {
+			task.Kaniko.BuildArgs[k] = v
+		}
+		task.Kaniko.BuildArgs["BASE_IMAGE"] = u.BaseSourceImage
+	case "app_image":
+		task.Kaniko.Dockerfile = fmt.Sprintf("dockerfiles/app_image/%s/%s/%s/%s/Dockerfile", u.Hardware, u.AppName, u.AppVersion, sanitizeName(u.VariantName))
+		task.Kaniko.Destination = u.AppImageDest
+		task.Kaniko.BuildArgs = map[string]string{}
+		for k, v := range u.BuildArgs {
+			task.Kaniko.BuildArgs[k] = v
+		}
+		task.Kaniko.BuildArgs["BASE_IMAGE"] = u.BaseImageDest
+	default:
+		task.Kaniko.Image = "alpine:3.20"
+		task.Kaniko.NoPush = true
+		task.Kaniko.Cache.Enabled = false
+		task.Kaniko.Cache.Repo = ""
+	}
+
+	if overrideDockerfile != "" && stageName == overrideStageName {
+		task.Kaniko.Dockerfile = overrideDockerfile
+	}
+
+	return task
+}
+
+func taskNameForStage(stageName string, u BuildUnit) string {
+	switch stageName {
+	case "base_image":
+		return sanitizeName(strings.Join([]string{"base-image", u.Hardware, u.BaseRef, u.BaseVariant.TagSuffix}, "-"))
+	case "app_image":
+		return sanitizeName(strings.Join([]string{"app-image", u.Hardware, u.AppName, u.AppVersion, u.VariantName}, "-"))
+	default:
+		return sanitizeName(strings.Join([]string{stageName, u.Hardware, u.AppName, u.AppVersion, u.VariantName}, "-"))
+	}
+}
+
+func stageByName(stages []matrix.Stage, stageName string) (matrix.Stage, bool) {
+	for _, st := range stages {
+		if st.Name == stageName {
+			return st, true
+		}
+	}
+	return matrix.Stage{}, false
 }
 
 func contains(xs []string, v string) bool {

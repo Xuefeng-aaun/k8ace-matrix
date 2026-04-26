@@ -7,7 +7,7 @@
 
 schema_version: "1.0"
 project: "k8ace-matrix"
-registry_prefix: "k8ace"
+registry_prefix: "172.20.47.182:5000/k8ace"
 
 # =============================================================================
 # 一、加速卡硬件矩阵定义 (Hardware Matrix)
@@ -931,6 +931,12 @@ build_args_overrides:
     BASE_IMAGE: "nvidia/cuda:{{ .CudaVersion }}-devel-ubuntu{{ .UbuntuVersion }}"
     GPU_ARCH: "all"
     NVCC_FLAGS: "-gencode arch=compute_70,code=sm_70 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_90,code=sm_90"
+    HTTP_PROXY: "http://172.20.47.182:7890"
+    HTTPS_PROXY: "http://172.20.47.182:7890"
+    NO_PROXY: "127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local"
+    http_proxy: "http://172.20.47.182:7890"
+    https_proxy: "http://172.20.47.182:7890"
+    no_proxy: "127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local"
   
   ascend:
     BASE_IMAGE: "ascend-base:{{ .CannVersion }}-ubuntu{{ .UbuntuVersion }}"
@@ -956,40 +962,33 @@ build_args_overrides:
 # 十一、CI/CD 集成配置 (CI/CD Integration)
 # =============================================================================
 ci_cd:
-  
-  github_actions:
-    workflow_file: ".github/workflows/k8ace-matrix-build.yml"
-    matrix_strategy:
-      fail-fast: false
-      max-parallel: 5
-    secrets:
-      - "REGISTRY_USERNAME"
-      - "REGISTRY_PASSWORD"
-      - "SIGNING_KEY"
-  
-  gitlab_ci:
-    stages: ["build-base", "build-app", "test", "push"]
-    parallel_matrix:
-      - HARDWARE: ["nvidia", "ascend", "cambricon"]
-        APP: ["pytorch", "tensorflow", "vllm"]
-  
-  tekton:
-    pipeline_ref: "k8ace-matrix-pipeline"
-    task_refs:
-      build: "kaniko-build-task"
-      test: "container-test-task"
-      push: "skopeo-push-task"
-  
   argo_workflows:
     namespace: "default"
     service_account: "argo-workflow"
     kind_default: "workflowtemplate"
     submit_mode_default: "argo-server"
     argo_server: ""
-    kaniko_image: "gcr.io/kaniko-project/executor:latest"
+    kaniko_image: "gcr.io/kaniko-project/executor:v1.23.2"
+    build_context:
+      default: "s3://kaniko-contexts/k8ace/context.tar.gz"
+      env:
+        AWS_REGION: "us-east-1"
+        S3_ENDPOINT: "http://172.20.47.182:9000"
+        S3_FORCE_PATH_STYLE: "true"
+        HTTP_PROXY: "http://172.20.47.182:7890"
+        HTTPS_PROXY: "http://172.20.47.182:7890"
+        NO_PROXY: "127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local"
+        GODEBUG: "http2client=0"
+      secret_name: "kaniko-context-credentials"
+      secret_env:
+        AWS_ACCESS_KEY_ID: "accessKey"
+        AWS_SECRET_ACCESS_KEY: "secretKey"
+    insecure_registries:
+      - "172.20.47.182:5000"
+    skip_push_permission_check: true
     registry_secret_name: "registry-credentials"
     cache:
-      enabled: true
+      enabled: false
       repo_template: "{{ .RegistryPrefix }}/cache/{{ .Hardware }}/{{ .Stage }}"
 
 # =============================================================================

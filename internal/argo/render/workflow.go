@@ -9,12 +9,15 @@ import (
 )
 
 type Options struct {
-	Kind               string
-	Name               string
-	Namespace          string
-	ServiceAccountName string
-	RegistrySecretName string
-	Labels             map[string]string
+	Kind                    string
+	Name                    string
+	Namespace               string
+	ServiceAccountName      string
+	ContextEnv              []EnvVar
+	InsecureRegistries      []string
+	SkipPushPermissionCheck bool
+	RegistrySecretName      string
+	Labels                  map[string]string
 }
 
 func BuildWorkflowYAML(p *pipeline.Plan, opt Options) ([]byte, error) {
@@ -31,19 +34,21 @@ func BuildWorkflowYAML(p *pipeline.Plan, opt Options) ([]byte, error) {
 		name = p.Name
 	}
 
+	templates := []Template{
+		{
+			Name: "main",
+			DAG: &DAGTemplate{
+				Tasks: dagTasks(p),
+			},
+		},
+	}
+	templates = append(templates, taskTemplates(p.Tasks, opt.ContextEnv, opt.RegistrySecretName, opt.InsecureRegistries, opt.SkipPushPermissionCheck)...)
+
 	spec := WorkflowSpec{
 		Entrypoint:         "main",
 		ServiceAccountName: opt.ServiceAccountName,
 		Volumes:            volumes(opt),
-		Templates: []Template{
-			{
-				Name: "main",
-				DAG: &DAGTemplate{
-					Tasks: dagTasks(p),
-				},
-			},
-			kanikoTemplate(opt.RegistrySecretName),
-		},
+		Templates:          templates,
 	}
 
 	var out any
@@ -77,70 +82,103 @@ func BuildWorkflowYAML(p *pipeline.Plan, opt Options) ([]byte, error) {
 func dagTasks(p *pipeline.Plan) []DAGTask {
 	var out []DAGTask
 	for _, t := range p.Tasks {
-		args := buildKanikoArgs(t.Kaniko)
 		out = append(out, DAGTask{
 			Name:         t.Name,
-			Template:     "kaniko",
+			Template:     t.Name,
 			Dependencies: t.DependsOn,
-			Arguments: &Arguments{
-				Parameters: []Parameter{
-					{Name: "context", Value: t.Kaniko.ContextDir},
-					{Name: "dockerfile", Value: t.Kaniko.Dockerfile},
-					{Name: "destination", Value: t.Kaniko.Destination},
-					{Name: "extraArgs", Value: strings.Join(args, " ")},
-					{Name: "kanikoImage", Value: t.Kaniko.Image},
+		})
+	}
+	return out
+}
+
+func taskTemplates(tasks []pipeline.Task, contextEnv []EnvVar, registrySecretName string, insecureRegistries []string, skipPushPermissionCheck bool) []Template {
+	mounts := kanikoVolumeMounts(registrySecretName)
+
+	out := make([]Template, 0, len(tasks))
+	for _, task := range tasks {
+		if strings.TrimSpace(task.Kaniko.Dockerfile) == "" {
+			out = append(out, noopTemplate(task))
+			continue
+		}
+
+		out = append(out, Template{
+			Name: task.Name,
+			Container: &Container{
+				Image: task.Kaniko.Image,
+				Command: []string{
+					"/kaniko/executor",
 				},
+				Args:         buildKanikoCommandArgs(task.Kaniko, insecureRegistries, skipPushPermissionCheck),
+				Env:          cloneEnvVars(contextEnv),
+				VolumeMounts: mounts,
 			},
 		})
 	}
 	return out
 }
 
-func kanikoTemplate(registrySecretName string) Template {
-	var mounts []VolumeMount
-	if strings.TrimSpace(registrySecretName) != "" {
-		mounts = append(mounts, VolumeMount{
-			Name:      "registry-config",
-			MountPath: "/kaniko/.docker",
-			ReadOnly:  true,
-		})
-	}
-
+func noopTemplate(task pipeline.Task) Template {
 	return Template{
-		Name: "kaniko",
-		Inputs: &Inputs{
-			Parameters: []Parameter{
-				{Name: "context"},
-				{Name: "dockerfile"},
-				{Name: "destination"},
-				{Name: "extraArgs"},
-				{Name: "kanikoImage"},
-			},
-		},
+		Name: task.Name,
 		Container: &Container{
-			Image: "{{inputs.parameters.kanikoImage}}",
+			Image: firstNonEmptyImage(task.Kaniko.Image, "alpine:3.20"),
 			Command: []string{
-				"/kaniko/executor",
+				"sh",
+				"-c",
 			},
 			Args: []string{
-				"--context={{inputs.parameters.context}}",
-				"--dockerfile={{inputs.parameters.dockerfile}}",
-				"--destination={{inputs.parameters.destination}}",
-				"{{inputs.parameters.extraArgs}}",
+				fmt.Sprintf("echo '[noop] stage=%s task=%s';", task.Stage, task.Name),
 			},
-			VolumeMounts: mounts,
 		},
 	}
 }
 
-func buildKanikoArgs(k pipeline.KanikoSpec) []string {
+func firstNonEmptyImage(values ...string) string {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func kanikoVolumeMounts(registrySecretName string) []VolumeMount {
+	if strings.TrimSpace(registrySecretName) == "" {
+		return nil
+	}
+
+	return []VolumeMount{
+		{
+			Name:      "registry-config",
+			MountPath: "/kaniko/.docker",
+			ReadOnly:  true,
+		},
+	}
+}
+
+func buildKanikoCommandArgs(k pipeline.KanikoSpec, insecureRegistries []string, skipPushPermissionCheck bool) []string {
+	args := []string{
+		"--context=" + k.ContextDir,
+		"--dockerfile=" + k.Dockerfile,
+		"--destination=" + k.Destination,
+	}
+	args = append(args, buildKanikoArgs(k, insecureRegistries, skipPushPermissionCheck)...)
+	return args
+}
+
+func buildKanikoArgs(k pipeline.KanikoSpec, insecureRegistries []string, skipPushPermissionCheck bool) []string {
 	var args []string
 
 	if k.Cache.Enabled {
 		args = append(args, "--cache=true")
-		if k.Cache.Repo != "" {
-			args = append(args, "--cache-repo="+k.Cache.Repo)
-		}
+	}
+	if skipPushPermissionCheck {
+		args = append(args, "--skip-push-permission-check")
+	}
+	args = append(args, buildInsecureRegistryArgs(insecureRegistries)...)
+	if k.Cache.Enabled && k.Cache.Repo != "" {
+		args = append(args, "--cache-repo="+k.Cache.Repo)
 	}
 	if k.NoPush {
 		args = append(args, "--no-push")
@@ -156,6 +194,93 @@ func buildKanikoArgs(k pipeline.KanikoSpec) []string {
 	}
 
 	return args
+}
+
+func buildInsecureRegistryArgs(insecureRegistries []string) []string {
+	return buildMultiValueArgs("--insecure-registry=", insecureRegistries)
+}
+
+func buildMultiValueArgs(prefix string, values []string) []string {
+	var args []string
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		args = append(args, prefix+value)
+	}
+	return args
+}
+
+func BuildContextEnvVars(staticEnv map[string]string, secretName string, secretEnv map[string]string) ([]EnvVar, error) {
+	var envs []EnvVar
+
+	keys := sortedNonEmptyKeys(staticEnv)
+	for _, key := range keys {
+		envs = append(envs, EnvVar{
+			Name:  key,
+			Value: strings.TrimSpace(staticEnv[key]),
+		})
+	}
+
+	secretKeys := sortedNonEmptyKeys(secretEnv)
+	if len(secretKeys) > 0 && strings.TrimSpace(secretName) == "" {
+		return nil, fmt.Errorf("build context secret_env requires secret_name")
+	}
+	for _, key := range secretKeys {
+		envs = append(envs, EnvVar{
+			Name: key,
+			ValueFrom: &EnvVarSource{
+				SecretKeyRef: &SecretKeySelector{
+					Name: strings.TrimSpace(secretName),
+					Key:  strings.TrimSpace(secretEnv[key]),
+				},
+			},
+		})
+	}
+
+	return envs, nil
+}
+
+func sortedNonEmptyKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for key, value := range m {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func cloneEnvVars(envs []EnvVar) []EnvVar {
+	if len(envs) == 0 {
+		return nil
+	}
+
+	out := make([]EnvVar, 0, len(envs))
+	for _, env := range envs {
+		copied := EnvVar{
+			Name:  env.Name,
+			Value: env.Value,
+		}
+		if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
+			copied.ValueFrom = &EnvVarSource{
+				SecretKeyRef: &SecretKeySelector{
+					Name: env.ValueFrom.SecretKeyRef.Name,
+					Key:  env.ValueFrom.SecretKeyRef.Key,
+				},
+			}
+		}
+		out = append(out, copied)
+	}
+
+	return out
 }
 
 func volumes(opt Options) []Volume {

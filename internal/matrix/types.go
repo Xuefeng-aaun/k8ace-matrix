@@ -47,19 +47,29 @@ type CICD struct {
 }
 
 type ArgoWorkflows struct {
-	Namespace         string          `yaml:"namespace"`
-	ServiceAccount    string          `yaml:"service_account"`
-	KindDefault       string          `yaml:"kind_default"`
-	SubmitModeDefault string          `yaml:"submit_mode_default"`
-	ArgoServer        string          `yaml:"argo_server"`
-	KanikoImage       string          `yaml:"kaniko_image"`
-	RegistrySecret    string          `yaml:"registry_secret_name"`
-	Cache             ArgoCacheConfig `yaml:"cache"`
+	Namespace               string           `yaml:"namespace"`
+	ServiceAccount          string           `yaml:"service_account"`
+	KindDefault             string           `yaml:"kind_default"`
+	SubmitModeDefault       string           `yaml:"submit_mode_default"`
+	ArgoServer              string           `yaml:"argo_server"`
+	KanikoImage             string           `yaml:"kaniko_image"`
+	InsecureRegistries      []string         `yaml:"insecure_registries"`
+	SkipPushPermissionCheck bool             `yaml:"skip_push_permission_check"`
+	BuildContext            ArgoBuildContext `yaml:"build_context"`
+	RegistrySecret          string           `yaml:"registry_secret_name"`
+	Cache                   ArgoCacheConfig  `yaml:"cache"`
 }
 
 type ArgoCacheConfig struct {
 	Enabled      bool   `yaml:"enabled"`
 	RepoTemplate string `yaml:"repo_template"`
+}
+
+type ArgoBuildContext struct {
+	Default    string            `yaml:"default"`
+	Env        map[string]string `yaml:"env"`
+	SecretName string            `yaml:"secret_name"`
+	SecretEnv  map[string]string `yaml:"secret_env"`
 }
 
 type BaseImageDef struct {

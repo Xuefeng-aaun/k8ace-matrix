@@ -51,7 +51,9 @@ func newSubmitCmd() *cobra.Command {
 			registryPrefix, _ := cmd.Flags().GetString("registry-prefix")
 			versionSuffix, _ := cmd.Flags().GetString("version-suffix")
 			builder, _ := cmd.Flags().GetString("builder")
+			contextFlagChanged := cmd.Flags().Changed("context")
 			contextDir, _ := cmd.Flags().GetString("context")
+			contextDir = resolveContextDir(contextDir, contextFlagChanged, aw)
 			dockerfile, _ := cmd.Flags().GetString("dockerfile")
 			kanikoImage, _ := cmd.Flags().GetString("kaniko-image")
 
@@ -82,6 +84,11 @@ func newSubmitCmd() *cobra.Command {
 				sel.KanikoImage = firstNonEmpty(aw.KanikoImage, "gcr.io/kaniko-project/executor:latest")
 			}
 
+			contextEnv, err := buildContextEnv(aw)
+			if err != nil {
+				return err
+			}
+
 			plans, err := pipeline.BuildPlans(m, sel)
 			if err != nil {
 				return err
@@ -92,12 +99,15 @@ func newSubmitCmd() *cobra.Command {
 
 			p := plans[0]
 			yamlBytes, err := render.BuildWorkflowYAML(p, render.Options{
-				Kind:               "workflow",
-				Name:               name,
-				Namespace:          ns,
-				ServiceAccountName: firstNonEmpty(serviceAccount, aw.ServiceAccount),
-				RegistrySecretName: firstNonEmpty(registrySecretName, aw.RegistrySecret),
-				Labels:             labelsFromCSV(labels),
+				Kind:                    "workflow",
+				Name:                    name,
+				Namespace:               ns,
+				ServiceAccountName:      firstNonEmpty(serviceAccount, aw.ServiceAccount),
+				ContextEnv:              contextEnv,
+				InsecureRegistries:      aw.InsecureRegistries,
+				SkipPushPermissionCheck: aw.SkipPushPermissionCheck,
+				RegistrySecretName:      firstNonEmpty(registrySecretName, aw.RegistrySecret),
+				Labels:                  labelsFromCSV(labels),
 			})
 			if err != nil {
 				return err
@@ -145,7 +155,7 @@ func newSubmitCmd() *cobra.Command {
 	cmd.Flags().String("argo-token", "", "argo server bearer token (or MATRIX_CI_ARGO_TOKEN)")
 
 	cmd.Flags().String("builder", "kaniko", "builder engine")
-	cmd.Flags().String("context", ".", "build context directory")
+	cmd.Flags().String("context", "", "build context override (defaults to ci_cd.argo_workflows.build_context.default or '.')")
 	cmd.Flags().String("dockerfile", "", "dockerfile path override")
 	cmd.Flags().String("kaniko-image", "", "kaniko executor image")
 	cmd.Flags().String("registry-prefix", "", "registry prefix override")

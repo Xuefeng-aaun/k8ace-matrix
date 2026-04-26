@@ -20,4 +20,3 @@ func Load(path string) (*Matrix, error) {
 
 	return &m, nil
 }
-

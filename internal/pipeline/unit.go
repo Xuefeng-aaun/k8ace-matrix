@@ -19,6 +19,7 @@ type BuildUnit struct {
 	BaseImageDest string
 	AppImageDest  string
 
+	BaseBuildArgs      map[string]string
 	BuildArgs          map[string]string
 	AdditionalPackages []string
 }
@@ -100,7 +101,7 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 						return nil, fmt.Errorf("no base variant for %s", v.BaseRef)
 					}
 
-					baseSource := buildBaseSourceImage(baseDef.Source, baseVar.TagSuffix)
+					baseSource := buildBaseSourceImage(baseDef.Source, baseVar)
 					baseDest := fmt.Sprintf("%s/%s-%s", regPrefix, v.BaseRef, baseVar.TagSuffix)
 
 					appDest := spec.FullImage
@@ -108,8 +109,13 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 						appDest = fmt.Sprintf("%s/%s%s-%s-%s-%s", regPrefix, spec.Name, ver, hw, sanitizeName(v.Name), versionSuffix)
 					}
 
-					buildArgs := map[string]string{}
+					baseBuildArgs := map[string]string{}
 					for k, val := range m.BuildArgsOverride[hw] {
+						baseBuildArgs[k] = val
+					}
+
+					buildArgs := map[string]string{}
+					for k, val := range baseBuildArgs {
 						buildArgs[k] = val
 					}
 					for k, val := range v.BuildArgs {
@@ -130,6 +136,7 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 						BaseSourceImage:    baseSource,
 						BaseImageDest:      baseDest,
 						AppImageDest:       appDest,
+						BaseBuildArgs:      baseBuildArgs,
 						BuildArgs:          buildArgs,
 						AdditionalPackages: v.AdditionalPackages,
 					})
@@ -177,9 +184,12 @@ func pickBaseVariant(vars []matrix.BaseVariant, hw string) (matrix.BaseVariant, 
 	return vars[0], true
 }
 
-func buildBaseSourceImage(source, tagSuffix string) string {
+func buildBaseSourceImage(source string, baseVar matrix.BaseVariant) string {
 	source = strings.TrimSpace(source)
-	tagSuffix = strings.TrimSpace(tagSuffix)
+	tagSuffix := strings.TrimSpace(baseVar.TagSuffix)
+	if upstreamTag, ok := baseVar.GetString("upstream_tag"); ok && strings.TrimSpace(upstreamTag) != "" {
+		tagSuffix = strings.TrimSpace(upstreamTag)
+	}
 	if source == "" {
 		return tagSuffix
 	}

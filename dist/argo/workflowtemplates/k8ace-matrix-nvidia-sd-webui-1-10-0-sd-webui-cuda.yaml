@@ -10,105 +10,146 @@ spec:
         - name: main
           dag:
             tasks:
-                - name: base-image-nvidia-cuda-base-cuda12-4-devel-ubuntu22-04
-                  template: kaniko
-                  arguments:
-                    parameters:
-                        - name: context
-                          value: .
-                        - name: dockerfile
-                          value: dockerfiles/base_image/nvidia/cuda_base/cuda12.4-devel-ubuntu22.04/Dockerfile
-                        - name: destination
-                          value: k8ace/cuda_base-cuda12.4-devel-ubuntu22.04
-                        - name: extraArgs
-                          value: --cache=true --cache-repo=k8ace/cache/nvidia/base_image --build-arg=BASE_IMAGE=nvidia/cuda:cuda12.4-devel-ubuntu22.04
-                        - name: kanikoImage
-                          value: gcr.io/kaniko-project/executor:latest
-                - name: app-image-nvidia-sd-webui-1-10-0-sd-webui-cuda
-                  template: kaniko
-                  dependencies:
-                    - base-image-nvidia-cuda-base-cuda12-4-devel-ubuntu22-04
-                  arguments:
-                    parameters:
-                        - name: context
-                          value: .
-                        - name: dockerfile
-                          value: dockerfiles/app_image/nvidia/sd_webui/1.10.0/sd-webui-cuda/Dockerfile
-                        - name: destination
-                          value: k8ace/sd_webui1.10.0-nvidia-sd-webui-cuda-dev
-                        - name: extraArgs
-                          value: --cache=true --cache-repo=k8ace/cache/nvidia/app_image --build-arg=BASE_IMAGE=k8ace/cuda_base-cuda12.4-devel-ubuntu22.04 --build-arg=GPU_ARCH=all --build-arg=NVCC_FLAGS=-gencode arch=compute_70,code=sm_70 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_90,code=sm_90
-                        - name: kanikoImage
-                          value: gcr.io/kaniko-project/executor:latest
                 - name: host-driver-nvidia-sd-webui-1-10-0-sd-webui-cuda
-                  template: kaniko
-                  dependencies:
-                    - app-image-nvidia-sd-webui-1-10-0-sd-webui-cuda
-                  arguments:
-                    parameters:
-                        - name: context
-                          value: .
-                        - name: dockerfile
-                          value: dockerfiles/host_driver/noop/Dockerfile
-                        - name: destination
-                          value: k8ace/noop-host-driver-nvidia-sd-webui-1-10-0-sd-webui-cuda
-                        - name: extraArgs
-                          value: --cache=true --cache-repo=k8ace/cache/nvidia/host_driver --no-push --build-arg=BASE_IMAGE=alpine:3.20
-                        - name: kanikoImage
-                          value: gcr.io/kaniko-project/executor:latest
-                - name: test-nvidia-sd-webui-1-10-0-sd-webui-cuda
-                  template: kaniko
+                  template: host-driver-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                - name: base-image-nvidia-cuda-base-cuda12-4-devel-ubuntu22-04
+                  template: base-image-nvidia-cuda-base-cuda12-4-devel-ubuntu22-04
                   dependencies:
                     - host-driver-nvidia-sd-webui-1-10-0-sd-webui-cuda
-                  arguments:
-                    parameters:
-                        - name: context
-                          value: .
-                        - name: dockerfile
-                          value: dockerfiles/test/noop/Dockerfile
-                        - name: destination
-                          value: k8ace/noop-test-nvidia-sd-webui-1-10-0-sd-webui-cuda
-                        - name: extraArgs
-                          value: --cache=true --cache-repo=k8ace/cache/nvidia/test --no-push --build-arg=BASE_IMAGE=alpine:3.20
-                        - name: kanikoImage
-                          value: gcr.io/kaniko-project/executor:latest
+                - name: app-image-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                  template: app-image-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                  dependencies:
+                    - base-image-nvidia-cuda-base-cuda12-4-devel-ubuntu22-04
+                - name: test-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                  template: test-nvidia-sd-webui-1-10-0-sd-webui-cuda
+                  dependencies:
+                    - app-image-nvidia-sd-webui-1-10-0-sd-webui-cuda
                 - name: push-nvidia-sd-webui-1-10-0-sd-webui-cuda
-                  template: kaniko
+                  template: push-nvidia-sd-webui-1-10-0-sd-webui-cuda
                   dependencies:
                     - test-nvidia-sd-webui-1-10-0-sd-webui-cuda
-                  arguments:
-                    parameters:
-                        - name: context
-                          value: .
-                        - name: dockerfile
-                          value: dockerfiles/push/noop/Dockerfile
-                        - name: destination
-                          value: k8ace/noop-push-nvidia-sd-webui-1-10-0-sd-webui-cuda
-                        - name: extraArgs
-                          value: --cache=true --cache-repo=k8ace/cache/nvidia/push --no-push --build-arg=BASE_IMAGE=alpine:3.20
-                        - name: kanikoImage
-                          value: gcr.io/kaniko-project/executor:latest
-        - name: kaniko
+        - name: host-driver-nvidia-sd-webui-1-10-0-sd-webui-cuda
           container:
-            image: '{{inputs.parameters.kanikoImage}}'
+            image: alpine:3.20
+            command:
+                - sh
+                - -c
+            args:
+                - echo '[noop] stage=host_driver task=host-driver-nvidia-sd-webui-1-10-0-sd-webui-cuda';
+        - name: base-image-nvidia-cuda-base-cuda12-4-devel-ubuntu22-04
+          container:
+            image: gcr.io/kaniko-project/executor:v1.23.2
             command:
                 - /kaniko/executor
             args:
-                - --context={{inputs.parameters.context}}
-                - --dockerfile={{inputs.parameters.dockerfile}}
-                - --destination={{inputs.parameters.destination}}
-                - '{{inputs.parameters.extraArgs}}'
+                - --context=s3://kaniko-contexts/k8ace/context.tar.gz
+                - --dockerfile=dockerfiles/base_image/nvidia/cuda_base/cuda12.4-devel-ubuntu22.04/Dockerfile
+                - --destination=172.20.47.182:5000/k8ace/cuda_base-cuda12.4-devel-ubuntu22.04
+                - --skip-push-permission-check
+                - --insecure-registry=172.20.47.182:5000
+                - --build-arg=BASE_IMAGE=nvidia/cuda:12.4.1-devel-ubuntu22.04
+                - --build-arg=GPU_ARCH=all
+                - --build-arg=HTTPS_PROXY=http://172.20.47.182:7890
+                - --build-arg=HTTP_PROXY=http://172.20.47.182:7890
+                - --build-arg=NO_PROXY=127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local
+                - --build-arg=NVCC_FLAGS=-gencode arch=compute_70,code=sm_70 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_90,code=sm_90
+                - --build-arg=http_proxy=http://172.20.47.182:7890
+                - --build-arg=https_proxy=http://172.20.47.182:7890
+                - --build-arg=no_proxy=127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local
+            env:
+                - name: AWS_REGION
+                  value: us-east-1
+                - name: GODEBUG
+                  value: http2client=0
+                - name: HTTPS_PROXY
+                  value: http://172.20.47.182:7890
+                - name: HTTP_PROXY
+                  value: http://172.20.47.182:7890
+                - name: NO_PROXY
+                  value: 127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local
+                - name: S3_ENDPOINT
+                  value: http://172.20.47.182:9000
+                - name: S3_FORCE_PATH_STYLE
+                  value: "true"
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                        name: kaniko-context-credentials
+                        key: accessKey
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                        name: kaniko-context-credentials
+                        key: secretKey
             volumeMounts:
                 - name: registry-config
                   mountPath: /kaniko/.docker
                   readOnly: true
-          inputs:
-            parameters:
-                - name: context
-                - name: dockerfile
-                - name: destination
-                - name: extraArgs
-                - name: kanikoImage
+        - name: app-image-nvidia-sd-webui-1-10-0-sd-webui-cuda
+          container:
+            image: gcr.io/kaniko-project/executor:v1.23.2
+            command:
+                - /kaniko/executor
+            args:
+                - --context=s3://kaniko-contexts/k8ace/context.tar.gz
+                - --dockerfile=dockerfiles/app_image/nvidia/sd_webui/1.10.0/sd-webui-cuda/Dockerfile
+                - --destination=172.20.47.182:5000/k8ace/sd_webui1.10.0-nvidia-sd-webui-cuda-dev
+                - --skip-push-permission-check
+                - --insecure-registry=172.20.47.182:5000
+                - --build-arg=BASE_IMAGE=172.20.47.182:5000/k8ace/cuda_base-cuda12.4-devel-ubuntu22.04
+                - --build-arg=GPU_ARCH=all
+                - --build-arg=HTTPS_PROXY=http://172.20.47.182:7890
+                - --build-arg=HTTP_PROXY=http://172.20.47.182:7890
+                - --build-arg=NO_PROXY=127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local
+                - --build-arg=NVCC_FLAGS=-gencode arch=compute_70,code=sm_70 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_90,code=sm_90
+                - --build-arg=http_proxy=http://172.20.47.182:7890
+                - --build-arg=https_proxy=http://172.20.47.182:7890
+                - --build-arg=no_proxy=127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local
+            env:
+                - name: AWS_REGION
+                  value: us-east-1
+                - name: GODEBUG
+                  value: http2client=0
+                - name: HTTPS_PROXY
+                  value: http://172.20.47.182:7890
+                - name: HTTP_PROXY
+                  value: http://172.20.47.182:7890
+                - name: NO_PROXY
+                  value: 127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local
+                - name: S3_ENDPOINT
+                  value: http://172.20.47.182:9000
+                - name: S3_FORCE_PATH_STYLE
+                  value: "true"
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                        name: kaniko-context-credentials
+                        key: accessKey
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                        name: kaniko-context-credentials
+                        key: secretKey
+            volumeMounts:
+                - name: registry-config
+                  mountPath: /kaniko/.docker
+                  readOnly: true
+        - name: test-nvidia-sd-webui-1-10-0-sd-webui-cuda
+          container:
+            image: alpine:3.20
+            command:
+                - sh
+                - -c
+            args:
+                - echo '[noop] stage=test task=test-nvidia-sd-webui-1-10-0-sd-webui-cuda';
+        - name: push-nvidia-sd-webui-1-10-0-sd-webui-cuda
+          container:
+            image: alpine:3.20
+            command:
+                - sh
+                - -c
+            args:
+                - echo '[noop] stage=push task=push-nvidia-sd-webui-1-10-0-sd-webui-cuda';
     volumes:
         - name: registry-config
           secret:

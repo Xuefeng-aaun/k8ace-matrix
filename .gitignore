@@ -1,0 +1,12 @@
+.trae/
+.gocache/
+.gomodcache/
+.gotmp/
+.bin/
+bin/
+.verifydist/
+dist/argo/
+dist/context/
+*.local.yaml
+*.local.yaml.bak*
+.backups/

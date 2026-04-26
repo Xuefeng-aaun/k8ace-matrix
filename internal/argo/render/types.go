@@ -23,16 +23,16 @@ type Workflow struct {
 type WorkflowSpec struct {
 	Entrypoint         string     `yaml:"entrypoint"`
 	ServiceAccountName string     `yaml:"serviceAccountName,omitempty"`
-	Templates          []Template  `yaml:"templates"`
-	Arguments          *Arguments  `yaml:"arguments,omitempty"`
-	Volumes            []Volume    `yaml:"volumes,omitempty"`
+	Templates          []Template `yaml:"templates"`
+	Arguments          *Arguments `yaml:"arguments,omitempty"`
+	Volumes            []Volume   `yaml:"volumes,omitempty"`
 }
 
 type Template struct {
-	Name      string        `yaml:"name"`
-	DAG       *DAGTemplate  `yaml:"dag,omitempty"`
-	Container *Container    `yaml:"container,omitempty"`
-	Inputs    *Inputs       `yaml:"inputs,omitempty"`
+	Name      string       `yaml:"name"`
+	DAG       *DAGTemplate `yaml:"dag,omitempty"`
+	Container *Container   `yaml:"container,omitempty"`
+	Inputs    *Inputs      `yaml:"inputs,omitempty"`
 }
 
 type DAGTemplate struct {
@@ -68,8 +68,18 @@ type Container struct {
 }
 
 type EnvVar struct {
-	Name  string `yaml:"name"`
-	Value string `yaml:"value,omitempty"`
+	Name      string        `yaml:"name"`
+	Value     string        `yaml:"value,omitempty"`
+	ValueFrom *EnvVarSource `yaml:"valueFrom,omitempty"`
+}
+
+type EnvVarSource struct {
+	SecretKeyRef *SecretKeySelector `yaml:"secretKeyRef,omitempty"`
+}
+
+type SecretKeySelector struct {
+	Name string `yaml:"name"`
+	Key  string `yaml:"key"`
 }
 
 type VolumeMount struct {
@@ -84,7 +94,7 @@ type Volume struct {
 }
 
 type SecretVolumeSource struct {
-	SecretName string `yaml:"secretName"`
+	SecretName string      `yaml:"secretName"`
 	Items      []KeyToPath `yaml:"items,omitempty"`
 }
 

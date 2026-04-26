@@ -44,7 +44,9 @@ func newRenderCmd() *cobra.Command {
 			registryPrefix, _ := cmd.Flags().GetString("registry-prefix")
 			versionSuffix, _ := cmd.Flags().GetString("version-suffix")
 			builder, _ := cmd.Flags().GetString("builder")
+			contextFlagChanged := cmd.Flags().Changed("context")
 			contextDir, _ := cmd.Flags().GetString("context")
+			contextDir = resolveContextDir(contextDir, contextFlagChanged, aw)
 			dockerfile, _ := cmd.Flags().GetString("dockerfile")
 			kanikoImage, _ := cmd.Flags().GetString("kaniko-image")
 
@@ -78,6 +80,11 @@ func newRenderCmd() *cobra.Command {
 				sel.KanikoImage = firstNonEmpty(aw.KanikoImage, "gcr.io/kaniko-project/executor:latest")
 			}
 
+			contextEnv, err := buildContextEnv(aw)
+			if err != nil {
+				return err
+			}
+
 			kind = firstNonEmpty(kind, aw.KindDefault, "workflowtemplate")
 			registrySecretName = firstNonEmpty(registrySecretName, aw.RegistrySecret)
 
@@ -94,12 +101,15 @@ func newRenderCmd() *cobra.Command {
 					}
 
 					yamlBytes, err := render.BuildWorkflowYAML(p, render.Options{
-						Kind:               kind,
-						Name:               name,
-						Namespace:          firstNonEmpty(namespace, aw.Namespace),
-						ServiceAccountName: firstNonEmpty(serviceAccount, aw.ServiceAccount),
-						RegistrySecretName: registrySecretName,
-						Labels:             labelsFromCSV(labels),
+						Kind:                    kind,
+						Name:                    name,
+						Namespace:               firstNonEmpty(namespace, aw.Namespace),
+						ServiceAccountName:      firstNonEmpty(serviceAccount, aw.ServiceAccount),
+						ContextEnv:              contextEnv,
+						InsecureRegistries:      aw.InsecureRegistries,
+						SkipPushPermissionCheck: aw.SkipPushPermissionCheck,
+						RegistrySecretName:      registrySecretName,
+						Labels:                  labelsFromCSV(labels),
 					})
 					if err != nil {
 						return err
@@ -116,12 +126,15 @@ func newRenderCmd() *cobra.Command {
 				return err
 			}
 			yamlBytes, err := render.BuildWorkflowYAML(p, render.Options{
-				Kind:               kind,
-				Name:               name,
-				Namespace:          firstNonEmpty(namespace, aw.Namespace),
-				ServiceAccountName: firstNonEmpty(serviceAccount, aw.ServiceAccount),
-				RegistrySecretName: registrySecretName,
-				Labels:             labelsFromCSV(labels),
+				Kind:                    kind,
+				Name:                    name,
+				Namespace:               firstNonEmpty(namespace, aw.Namespace),
+				ServiceAccountName:      firstNonEmpty(serviceAccount, aw.ServiceAccount),
+				ContextEnv:              contextEnv,
+				InsecureRegistries:      aw.InsecureRegistries,
+				SkipPushPermissionCheck: aw.SkipPushPermissionCheck,
+				RegistrySecretName:      registrySecretName,
+				Labels:                  labelsFromCSV(labels),
 			})
 			if err != nil {
 				return err
@@ -161,7 +174,7 @@ func newRenderCmd() *cobra.Command {
 	cmd.Flags().Bool("split", true, "split output into multiple files when using --out-dir")
 
 	cmd.Flags().String("builder", "kaniko", "builder engine")
-	cmd.Flags().String("context", ".", "build context directory")
+	cmd.Flags().String("context", "", "build context override (defaults to ci_cd.argo_workflows.build_context.default or '.')")
 	cmd.Flags().String("dockerfile", "", "dockerfile path override")
 	cmd.Flags().String("kaniko-image", "", "kaniko executor image")
 	cmd.Flags().String("registry-secret-name", "", "k8s secret name for docker registry credentials (dockerconfigjson)")
