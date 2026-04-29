@@ -35,13 +35,14 @@ func newScaffoldDockerfilesCmd() *cobra.Command {
 			}
 
 			sel := pipeline.Selection{
-				Hardwares:    viper.GetStringSlice("hardware"),
-				Apps:         viper.GetStringSlice("app"),
-				AppName:      viper.GetString("app-name"),
-				AppVersion:   viper.GetString("app-version"),
-				Variant:      viper.GetString("variant"),
-				Stages:       viper.GetStringSlice("stage"),
-				PriorityTier: viper.GetString("priority"),
+				Hardwares:     viper.GetStringSlice("hardware"),
+				Apps:          viper.GetStringSlice("app"),
+				AppName:       viper.GetString("app-name"),
+				AppVersion:    viper.GetString("app-version"),
+				Variant:       viper.GetString("variant"),
+				BaseTagSuffix: viper.GetString("base-tag-suffix"),
+				Stages:        viper.GetStringSlice("stage"),
+				PriorityTier:  viper.GetString("priority"),
 
 				RegistryPrefix: viper.GetString("registry-prefix"),
 				VersionSuffix:  viper.GetString("version-suffix"),
@@ -87,6 +88,7 @@ func newScaffoldDockerfilesCmd() *cobra.Command {
 	cmd.Flags().String("app-name", "", "application name from application_matrix (e.g. pytorch)")
 	cmd.Flags().String("app-version", "", "application version (e.g. 2.5.1)")
 	cmd.Flags().String("variant", "", "variant name (e.g. pytorch-cuda)")
+	cmd.Flags().String("base-tag-suffix", "", "base image tag_suffix override from base_image_matrix")
 	cmd.Flags().StringSlice("stage", []string{"base_image", "app_image"}, "stages to scaffold (or 'all')")
 	cmd.Flags().String("priority", "", "priority tier from priority_build_list")
 
@@ -103,6 +105,7 @@ func newScaffoldDockerfilesCmd() *cobra.Command {
 	_ = viper.BindPFlag("app-name", cmd.Flags().Lookup("app-name"))
 	_ = viper.BindPFlag("app-version", cmd.Flags().Lookup("app-version"))
 	_ = viper.BindPFlag("variant", cmd.Flags().Lookup("variant"))
+	_ = viper.BindPFlag("base-tag-suffix", cmd.Flags().Lookup("base-tag-suffix"))
 	_ = viper.BindPFlag("stage", cmd.Flags().Lookup("stage"))
 	_ = viper.BindPFlag("priority", cmd.Flags().Lookup("priority"))
 
@@ -115,4 +118,3 @@ func newScaffoldDockerfilesCmd() *cobra.Command {
 
 	return cmd
 }
-

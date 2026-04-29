@@ -10,13 +10,14 @@ import (
 )
 
 type Selection struct {
-	Hardwares    []string
-	Apps         []string
-	AppName      string
-	AppVersion   string
-	Variant      string
-	Stages       []string
-	PriorityTier string
+	Hardwares     []string
+	Apps          []string
+	AppName       string
+	AppVersion    string
+	Variant       string
+	BaseTagSuffix string
+	Stages        []string
+	PriorityTier  string
 
 	RegistryPrefix string
 	VersionSuffix  string

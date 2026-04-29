@@ -132,6 +132,7 @@ type ApplicationDef struct {
 type AppVariant struct {
 	Name               string            `yaml:"name"`
 	BaseRef            string            `yaml:"base_ref"`
+	BaseTagSuffix      string            `yaml:"base_tag_suffix"`
 	Hardware           []string          `yaml:"hardware"`
 	AdditionalPackages []string          `yaml:"additional_packages"`
 	BuildArgs          map[string]string `yaml:"build_args"`
@@ -149,6 +150,9 @@ func (v *AppVariant) UnmarshalYAML(node *yaml.Node) error {
 	}
 	if s, ok := m["base_ref"].(string); ok {
 		v.BaseRef = s
+	}
+	if s, ok := m["base_tag_suffix"].(string); ok {
+		v.BaseTagSuffix = s
 	}
 
 	if xs, ok := m["hardware"].([]any); ok {
@@ -181,6 +185,7 @@ func (v *AppVariant) UnmarshalYAML(node *yaml.Node) error {
 
 	delete(m, "name")
 	delete(m, "base_ref")
+	delete(m, "base_tag_suffix")
 	delete(m, "hardware")
 	delete(m, "additional_packages")
 	delete(m, "build_args")

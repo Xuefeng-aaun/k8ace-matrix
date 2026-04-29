@@ -40,6 +40,7 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 	appName := strings.TrimSpace(sel.AppName)
 	appVersion := strings.TrimSpace(sel.AppVersion)
 	variantFilter := strings.TrimSpace(sel.Variant)
+	baseTagOverride := strings.TrimSpace(sel.BaseTagSuffix)
 
 	var appSpecs []AppSpec
 	if appName != "" {
@@ -96,9 +97,13 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 					if !ok {
 						return nil, fmt.Errorf("base_ref not found in base_image_matrix: %s", v.BaseRef)
 					}
-					baseVar, ok := pickBaseVariant(baseDef.Variants, hw)
-					if !ok {
-						return nil, fmt.Errorf("no base variant for %s", v.BaseRef)
+					baseTagSuffix := strings.TrimSpace(v.BaseTagSuffix)
+					if baseTagOverride != "" {
+						baseTagSuffix = baseTagOverride
+					}
+					baseVar, err := pickBaseVariant(baseDef.Variants, hw, baseTagSuffix)
+					if err != nil {
+						return nil, fmt.Errorf("select base variant for app %s variant %s base_ref %s hardware %s: %w", spec.Name, v.Name, v.BaseRef, hw, err)
 					}
 
 					baseSource := buildBaseSourceImage(baseDef.Source, baseVar)
@@ -172,16 +177,40 @@ func specVersions(def matrix.ApplicationDef, requested string) []string {
 	return []string{def.Versions[0]}
 }
 
-func pickBaseVariant(vars []matrix.BaseVariant, hw string) (matrix.BaseVariant, bool) {
+func pickBaseVariant(vars []matrix.BaseVariant, hw string, baseTagSuffix string) (matrix.BaseVariant, error) {
 	if len(vars) == 0 {
-		return matrix.BaseVariant{}, false
+		return matrix.BaseVariant{}, fmt.Errorf("base variants is empty")
 	}
+
+	var compatible []matrix.BaseVariant
 	for _, v := range vars {
 		if containsFold(v.K8AceCompatible, hw) {
-			return v, true
+			compatible = append(compatible, v)
 		}
 	}
-	return vars[0], true
+	if len(compatible) == 0 {
+		return matrix.BaseVariant{}, fmt.Errorf("no base variant compatible with hardware %s", hw)
+	}
+
+	baseTagSuffix = strings.TrimSpace(baseTagSuffix)
+	if baseTagSuffix != "" {
+		for _, v := range compatible {
+			if strings.EqualFold(strings.TrimSpace(v.TagSuffix), baseTagSuffix) {
+				return v, nil
+			}
+		}
+		return matrix.BaseVariant{}, fmt.Errorf("base_tag_suffix %s not found or not compatible with hardware %s", baseTagSuffix, hw)
+	}
+
+	for _, status := range []string{"recommended", "stable"} {
+		for _, v := range compatible {
+			if s, ok := v.GetString("status"); ok && strings.EqualFold(strings.TrimSpace(s), status) {
+				return v, nil
+			}
+		}
+	}
+
+	return compatible[0], nil
 }
 
 func buildBaseSourceImage(source string, baseVar matrix.BaseVariant) string {

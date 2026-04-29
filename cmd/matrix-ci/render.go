@@ -39,6 +39,7 @@ func newRenderCmd() *cobra.Command {
 			appName, _ := cmd.Flags().GetString("app-name")
 			appVersion, _ := cmd.Flags().GetString("app-version")
 			variant, _ := cmd.Flags().GetString("variant")
+			baseTagSuffix, _ := cmd.Flags().GetString("base-tag-suffix")
 			stages, _ := cmd.Flags().GetStringSlice("stage")
 			priority, _ := cmd.Flags().GetString("priority")
 			registryPrefix, _ := cmd.Flags().GetString("registry-prefix")
@@ -66,6 +67,7 @@ func newRenderCmd() *cobra.Command {
 				AppName:        appName,
 				AppVersion:     appVersion,
 				Variant:        variant,
+				BaseTagSuffix:  baseTagSuffix,
 				Stages:         stages,
 				PriorityTier:   priority,
 				RegistryPrefix: registryPrefix,
@@ -160,6 +162,7 @@ func newRenderCmd() *cobra.Command {
 	cmd.Flags().String("app-name", "", "application name from application_matrix (e.g. pytorch)")
 	cmd.Flags().String("app-version", "", "application version (e.g. 2.5.1)")
 	cmd.Flags().String("variant", "", "variant name (e.g. pytorch-cuda)")
+	cmd.Flags().String("base-tag-suffix", "", "base image tag_suffix override from base_image_matrix")
 	cmd.Flags().StringSlice("stage", []string{"all"}, "stages (repeatable)")
 	cmd.Flags().String("priority", "", "priority tier from priority_build_list")
 
