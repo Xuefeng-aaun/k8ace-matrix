@@ -1,0 +1,4 @@
+# hardware app_name app_version variant stages
+nvidia comfyui latest comfyui-cuda app_image,test,push
+nvidia llama_factory 0.9.0 llamafactory-cuda app_image,test,push
+nvidia stable_diffusion 3.5 sd-cuda app_image,test,push

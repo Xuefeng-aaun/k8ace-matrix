@@ -46,7 +46,9 @@ type Task struct {
 	App       string
 	DependsOn []string
 
-	Kaniko KanikoSpec
+	Kaniko       KanikoSpec
+	TestImage    string
+	TestCommands []string
 }
 
 type KanikoSpec struct {
@@ -363,6 +365,15 @@ func buildStageTask(
 			task.Kaniko.BuildArgs[k] = v
 		}
 		task.Kaniko.BuildArgs["BASE_IMAGE"] = u.BaseImageDest
+	case "test":
+		task.TestImage = u.AppImageDest
+		task.TestCommands = []string{
+			fmt.Sprintf("if [ -f /opt/k8ace/hack/test/smoke.sh ]; then bash /opt/k8ace/hack/test/smoke.sh L1 %s %s; else python3 --version && (pip list --format=columns 2>/dev/null || pip3 list --format=columns 2>/dev/null || true); fi", u.AppName, u.Hardware),
+		}
+		task.Kaniko.Image = u.AppImageDest
+		task.Kaniko.NoPush = true
+		task.Kaniko.Cache.Enabled = false
+		task.Kaniko.Cache.Repo = ""
 	default:
 		task.Kaniko.Image = "alpine:3.20"
 		task.Kaniko.NoPush = true

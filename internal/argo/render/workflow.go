@@ -13,7 +13,9 @@ type Options struct {
 	Name                    string
 	Namespace               string
 	ServiceAccountName      string
+	Parallelism             int
 	ContextEnv              []EnvVar
+	RegistryMirrors         []string
 	InsecureRegistries      []string
 	SkipPushPermissionCheck bool
 	RegistrySecretName      string
@@ -42,11 +44,12 @@ func BuildWorkflowYAML(p *pipeline.Plan, opt Options) ([]byte, error) {
 			},
 		},
 	}
-	templates = append(templates, taskTemplates(p.Tasks, opt.ContextEnv, opt.RegistrySecretName, opt.InsecureRegistries, opt.SkipPushPermissionCheck)...)
+	templates = append(templates, taskTemplates(p.Tasks, opt.ContextEnv, opt.RegistrySecretName, opt.RegistryMirrors, opt.InsecureRegistries, opt.SkipPushPermissionCheck)...)
 
 	spec := WorkflowSpec{
 		Entrypoint:         "main",
 		ServiceAccountName: opt.ServiceAccountName,
+		Parallelism:        opt.Parallelism,
 		Volumes:            volumes(opt),
 		Templates:          templates,
 	}
@@ -91,11 +94,16 @@ func dagTasks(p *pipeline.Plan) []DAGTask {
 	return out
 }
 
-func taskTemplates(tasks []pipeline.Task, contextEnv []EnvVar, registrySecretName string, insecureRegistries []string, skipPushPermissionCheck bool) []Template {
+func taskTemplates(tasks []pipeline.Task, contextEnv []EnvVar, registrySecretName string, registryMirrors []string, insecureRegistries []string, skipPushPermissionCheck bool) []Template {
 	mounts := kanikoVolumeMounts(registrySecretName)
 
 	out := make([]Template, 0, len(tasks))
 	for _, task := range tasks {
+		if task.TestImage != "" {
+			out = append(out, testTemplate(task))
+			continue
+		}
+
 		if strings.TrimSpace(task.Kaniko.Dockerfile) == "" {
 			out = append(out, noopTemplate(task))
 			continue
@@ -108,7 +116,7 @@ func taskTemplates(tasks []pipeline.Task, contextEnv []EnvVar, registrySecretNam
 				Command: []string{
 					"/kaniko/executor",
 				},
-				Args:         buildKanikoCommandArgs(task.Kaniko, insecureRegistries, skipPushPermissionCheck),
+				Args:         buildKanikoCommandArgs(task.Kaniko, registryMirrors, insecureRegistries, skipPushPermissionCheck, contextEnv),
 				Env:          cloneEnvVars(contextEnv),
 				VolumeMounts: mounts,
 			},
@@ -129,6 +137,24 @@ func noopTemplate(task pipeline.Task) Template {
 			Args: []string{
 				fmt.Sprintf("echo '[noop] stage=%s task=%s';", task.Stage, task.Name),
 			},
+		},
+	}
+}
+
+func testTemplate(task pipeline.Task) Template {
+	script := fmt.Sprintf("echo '[test] stage=%s task=%s image=%s';\n", task.Stage, task.Name, task.TestImage)
+	for _, cmd := range task.TestCommands {
+		script += fmt.Sprintf("echo '[test] running: %s';\n", cmd)
+		script += cmd + " || { echo '[test] FAILED: " + cmd + "'; exit 1; };\n"
+	}
+	script += "echo '[test] ALL PASSED';\n"
+
+	return Template{
+		Name: task.Name,
+		Container: &Container{
+			Image:   task.TestImage,
+			Command: []string{"sh", "-c"},
+			Args:    []string{script},
 		},
 	}
 }
@@ -157,17 +183,18 @@ func kanikoVolumeMounts(registrySecretName string) []VolumeMount {
 	}
 }
 
-func buildKanikoCommandArgs(k pipeline.KanikoSpec, insecureRegistries []string, skipPushPermissionCheck bool) []string {
+func buildKanikoCommandArgs(k pipeline.KanikoSpec, registryMirrors []string, insecureRegistries []string, skipPushPermissionCheck bool, contextEnv []EnvVar) []string {
 	args := []string{
 		"--context=" + k.ContextDir,
 		"--dockerfile=" + k.Dockerfile,
 		"--destination=" + k.Destination,
 	}
-	args = append(args, buildKanikoArgs(k, insecureRegistries, skipPushPermissionCheck)...)
+	args = append(args, buildKanikoArgs(k, registryMirrors, insecureRegistries, skipPushPermissionCheck)...)
+	args = append(args, buildProxyBuildArgs(k.BuildArgs, contextEnv)...)
 	return args
 }
 
-func buildKanikoArgs(k pipeline.KanikoSpec, insecureRegistries []string, skipPushPermissionCheck bool) []string {
+func buildKanikoArgs(k pipeline.KanikoSpec, registryMirrors []string, insecureRegistries []string, skipPushPermissionCheck bool) []string {
 	var args []string
 
 	if k.Cache.Enabled {
@@ -176,6 +203,7 @@ func buildKanikoArgs(k pipeline.KanikoSpec, insecureRegistries []string, skipPus
 	if skipPushPermissionCheck {
 		args = append(args, "--skip-push-permission-check")
 	}
+	args = append(args, buildRegistryMirrorArgs(registryMirrors)...)
 	args = append(args, buildInsecureRegistryArgs(insecureRegistries)...)
 	if k.Cache.Enabled && k.Cache.Repo != "" {
 		args = append(args, "--cache-repo="+k.Cache.Repo)
@@ -196,6 +224,10 @@ func buildKanikoArgs(k pipeline.KanikoSpec, insecureRegistries []string, skipPus
 	return args
 }
 
+func buildRegistryMirrorArgs(registryMirrors []string) []string {
+	return buildMultiValueArgs("--registry-mirror=", registryMirrors)
+}
+
 func buildInsecureRegistryArgs(insecureRegistries []string) []string {
 	return buildMultiValueArgs("--insecure-registry=", insecureRegistries)
 }
@@ -210,6 +242,31 @@ func buildMultiValueArgs(prefix string, values []string) []string {
 		}
 		seen[value] = true
 		args = append(args, prefix+value)
+	}
+	return args
+}
+
+func buildProxyBuildArgs(existing map[string]string, contextEnv []EnvVar) []string {
+	proxyKeys := map[string]bool{
+		"HTTP_PROXY":  true,
+		"HTTPS_PROXY": true,
+		"http_proxy":  true,
+		"https_proxy": true,
+		"NO_PROXY":    true,
+		"no_proxy":    true,
+	}
+
+	var args []string
+	for _, env := range contextEnv {
+		key := strings.TrimSpace(env.Name)
+		value := strings.TrimSpace(env.Value)
+		if !proxyKeys[key] || value == "" {
+			continue
+		}
+		if _, ok := existing[key]; ok {
+			continue
+		}
+		args = append(args, "--build-arg="+key+"="+value)
 	}
 	return args
 }

@@ -23,6 +23,7 @@ type Workflow struct {
 type WorkflowSpec struct {
 	Entrypoint         string     `yaml:"entrypoint"`
 	ServiceAccountName string     `yaml:"serviceAccountName,omitempty"`
+	Parallelism        int        `yaml:"parallelism,omitempty"`
 	Templates          []Template `yaml:"templates"`
 	Arguments          *Arguments `yaml:"arguments,omitempty"`
 	Volumes            []Volume   `yaml:"volumes,omitempty"`

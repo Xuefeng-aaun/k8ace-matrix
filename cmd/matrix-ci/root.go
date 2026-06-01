@@ -12,7 +12,7 @@ var (
 	cfgFile string
 	rootCmd = &cobra.Command{
 		Use:   "matrix-ci",
-		Short: "Generate and submit Argo Workflows from images-matrix.yaml",
+		Short: "Render and submit image build workflows from images-matrix.yaml",
 	}
 )
 
@@ -31,5 +31,5 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file")
 	rootCmd.AddCommand(newRenderCmd())
 	rootCmd.AddCommand(newSubmitCmd())
-	rootCmd.AddCommand(newScaffoldCmd())
+	rootCmd.AddCommand(newBatchCmd())
 }

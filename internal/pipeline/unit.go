@@ -22,6 +22,18 @@ type BuildUnit struct {
 	BaseBuildArgs      map[string]string
 	BuildArgs          map[string]string
 	AdditionalPackages []string
+
+	// 结构化 Dockerfile 字段
+	SystemPackages  []string
+	GitRepo         string
+	GitRef          string
+	AppRoot         string
+	Venv            bool
+	RequirementsFile string
+	Entrypoint      string
+	Ports           []string
+	Env             map[string]string
+	Volumes         []string
 }
 
 type AppSpec struct {
@@ -139,6 +151,16 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 						BaseBuildArgs:      baseBuildArgs,
 						BuildArgs:          buildArgs,
 						AdditionalPackages: v.AdditionalPackages,
+						SystemPackages:     v.SystemPackages,
+						GitRepo:            v.GitRepo,
+						GitRef:             v.GitRef,
+						AppRoot:            v.AppRoot,
+						Venv:               v.Venv,
+						RequirementsFile:   v.RequirementsFile,
+						Entrypoint:         v.Entrypoint,
+						Ports:              v.Ports,
+						Env:                v.Env,
+						Volumes:            v.Volumes,
 					})
 				}
 			}
@@ -186,6 +208,11 @@ func pickBaseVariant(vars []matrix.BaseVariant, hw string) (matrix.BaseVariant, 
 
 func buildBaseSourceImage(source string, baseVar matrix.BaseVariant) string {
 	source = strings.TrimSpace(source)
+	upstreamOverride := false
+	if upstreamSource, ok := baseVar.GetString("upstream_source"); ok && strings.TrimSpace(upstreamSource) != "" {
+		source = strings.TrimSpace(upstreamSource)
+		upstreamOverride = true
+	}
 	tagSuffix := strings.TrimSpace(baseVar.TagSuffix)
 	if upstreamTag, ok := baseVar.GetString("upstream_tag"); ok && strings.TrimSpace(upstreamTag) != "" {
 		tagSuffix = strings.TrimSpace(upstreamTag)
@@ -196,7 +223,7 @@ func buildBaseSourceImage(source string, baseVar matrix.BaseVariant) string {
 	if tagSuffix == "" {
 		return source
 	}
-	if strings.Contains(source, ":") {
+	if !upstreamOverride && strings.Contains(source, ":") {
 		return source
 	}
 	return source + ":" + tagSuffix

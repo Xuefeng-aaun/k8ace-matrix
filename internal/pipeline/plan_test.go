@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"strings"
 	"testing"
 
 	"k8ace-matrix/internal/matrix"
@@ -62,6 +63,43 @@ func TestBuildPlansResolvesStageDependencies(t *testing.T) {
 	}
 	if taskByStage["host_driver"].Kaniko.Cache.Enabled {
 		t.Fatalf("host_driver cache enabled = true, want false")
+	}
+}
+
+func TestBuildPlansTestStageRunsSmokeHelperWhenAvailable(t *testing.T) {
+	m := testMatrix()
+
+	plans, err := BuildPlans(m, Selection{
+		Hardwares:     []string{"nvidia"},
+		AppName:       "demo",
+		AppVersion:    "1.0.0",
+		Variant:       "demo-cuda",
+		Stages:        []string{"test"},
+		VersionSuffix: "dev",
+		Builder:       "kaniko",
+		KanikoImage:   "kaniko:test",
+	})
+	if err != nil {
+		t.Fatalf("BuildPlans() error = %v", err)
+	}
+
+	taskByStage := map[string]Task{}
+	for _, task := range plans[0].Tasks {
+		taskByStage[task.Stage] = task
+	}
+
+	testTask, ok := taskByStage["test"]
+	if !ok {
+		t.Fatalf("test stage not generated; stages=%v", taskByStage)
+	}
+	if len(testTask.TestCommands) != 1 {
+		t.Fatalf("test commands = %v, want one smoke command", testTask.TestCommands)
+	}
+	if !strings.Contains(testTask.TestCommands[0], "/opt/k8ace/hack/test/smoke.sh") {
+		t.Fatalf("test command should call smoke helper, got %q", testTask.TestCommands[0])
+	}
+	if !strings.Contains(testTask.TestCommands[0], "L1 demo nvidia") {
+		t.Fatalf("test command should pass app+hardware to smoke helper, got %q", testTask.TestCommands[0])
 	}
 }
 
