@@ -1,0 +1,2 @@
+# hardware app_name app_version variant stages
+nvidia comfyui latest comfyui-cuda base_image

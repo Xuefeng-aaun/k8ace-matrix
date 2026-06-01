@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"k8ace-matrix/internal/matrix"
@@ -33,16 +34,28 @@ func TestBuildWorkflowYAML_Golden(t *testing.T) {
 		Stages:        []string{"all"},
 		VersionSuffix: "dev",
 		Builder:       "kaniko",
-		ContextDir:    ".",
+		ContextDir:    m.CICD.ArgoWorkflows.BuildContext.Default,
 		KanikoImage:   "kaniko:test",
 	})
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
 	}
 
+	contextEnv, err := BuildContextEnvVars(
+		m.CICD.ArgoWorkflows.BuildContext.Env,
+		m.CICD.ArgoWorkflows.BuildContext.SecretName,
+		m.CICD.ArgoWorkflows.BuildContext.SecretEnv,
+	)
+	if err != nil {
+		t.Fatalf("build context env: %v", err)
+	}
+
 	got, err := BuildWorkflowYAML(p, Options{
-		Kind:               "workflowtemplate",
-		RegistrySecretName: "regcred",
+		Kind:                    "workflowtemplate",
+		ContextEnv:              contextEnv,
+		InsecureRegistries:      m.CICD.ArgoWorkflows.InsecureRegistries,
+		SkipPushPermissionCheck: m.CICD.ArgoWorkflows.SkipPushPermissionCheck,
+		RegistrySecretName:      "regcred",
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -55,5 +68,69 @@ func TestBuildWorkflowYAML_Golden(t *testing.T) {
 
 	if string(got) != string(want) {
 		t.Fatalf("golden mismatch\n--- got ---\n%s\n--- want ---\n%s\n", string(got), string(want))
+	}
+}
+
+func TestBuildWorkflowYAML_RendersNoopStageWithoutKaniko(t *testing.T) {
+	p := &pipeline.Plan{
+		Name: "demo",
+		Tasks: []pipeline.Task{
+			{
+				Name:  "host-driver-demo",
+				Stage: "host_driver",
+				Kaniko: pipeline.KanikoSpec{
+					Image: "alpine:3.20",
+				},
+			},
+		},
+	}
+
+	got, err := BuildWorkflowYAML(p, Options{
+		Kind: "workflowtemplate",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	out := string(got)
+	if !strings.Contains(out, "image: alpine:3.20") {
+		t.Fatalf("noop template should use lightweight container, got:\n%s", out)
+	}
+	if strings.Contains(out, "/kaniko/executor") {
+		t.Fatalf("noop template should not invoke kaniko, got:\n%s", out)
+	}
+	if strings.Contains(out, "--dockerfile=") {
+		t.Fatalf("noop template should not render dockerfile args, got:\n%s", out)
+	}
+}
+
+func TestBuildWorkflowYAML_RendersInsecureRegistries(t *testing.T) {
+	p := &pipeline.Plan{
+		Name: "demo",
+		Tasks: []pipeline.Task{
+			{
+				Name:  "base",
+				Stage: "base_image",
+				Kaniko: pipeline.KanikoSpec{
+					Image:       "kaniko:test",
+					ContextDir:  ".",
+					Dockerfile:  "Dockerfile",
+					Destination: "registry.local:5000/k8ace/base:dev",
+				},
+			},
+		},
+	}
+
+	got, err := BuildWorkflowYAML(p, Options{
+		Kind:               "workflowtemplate",
+		InsecureRegistries: []string{"registry.local:5000", "", "registry.local:5000"},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	out := string(got)
+	if count := strings.Count(out, "--insecure-registry=registry.local:5000"); count != 1 {
+		t.Fatalf("insecure registry arg count = %d, want 1\n%s", count, out)
 	}
 }

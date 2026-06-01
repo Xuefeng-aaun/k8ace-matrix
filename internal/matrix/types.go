@@ -47,19 +47,31 @@ type CICD struct {
 }
 
 type ArgoWorkflows struct {
-	Namespace         string          `yaml:"namespace"`
-	ServiceAccount    string          `yaml:"service_account"`
-	KindDefault       string          `yaml:"kind_default"`
-	SubmitModeDefault string          `yaml:"submit_mode_default"`
-	ArgoServer        string          `yaml:"argo_server"`
-	KanikoImage       string          `yaml:"kaniko_image"`
-	RegistrySecret    string          `yaml:"registry_secret_name"`
-	Cache             ArgoCacheConfig `yaml:"cache"`
+	Namespace               string           `yaml:"namespace"`
+	ServiceAccount          string           `yaml:"service_account"`
+	KindDefault             string           `yaml:"kind_default"`
+	SubmitModeDefault       string           `yaml:"submit_mode_default"`
+	ArgoServer              string           `yaml:"argo_server"`
+	KanikoImage             string           `yaml:"kaniko_image"`
+	Parallelism             int              `yaml:"parallelism"`
+	RegistryMirrors         []string         `yaml:"registry_mirrors"`
+	InsecureRegistries      []string         `yaml:"insecure_registries"`
+	SkipPushPermissionCheck bool             `yaml:"skip_push_permission_check"`
+	BuildContext            ArgoBuildContext `yaml:"build_context"`
+	RegistrySecret          string           `yaml:"registry_secret_name"`
+	Cache                   ArgoCacheConfig  `yaml:"cache"`
 }
 
 type ArgoCacheConfig struct {
 	Enabled      bool   `yaml:"enabled"`
 	RepoTemplate string `yaml:"repo_template"`
+}
+
+type ArgoBuildContext struct {
+	Default    string            `yaml:"default"`
+	Env        map[string]string `yaml:"env"`
+	SecretName string            `yaml:"secret_name"`
+	SecretEnv  map[string]string `yaml:"secret_env"`
 }
 
 type BaseImageDef struct {
@@ -125,7 +137,20 @@ type AppVariant struct {
 	Hardware           []string          `yaml:"hardware"`
 	AdditionalPackages []string          `yaml:"additional_packages"`
 	BuildArgs          map[string]string `yaml:"build_args"`
-	Extra              map[string]any    `yaml:"-"`
+
+	// 结构化 Dockerfile 字段（可选）
+	SystemPackages   []string          `yaml:"system_packages"`
+	GitRepo          string            `yaml:"git_repo"`
+	GitRef           string            `yaml:"git_ref"`
+	AppRoot          string            `yaml:"app_root"`
+	Venv             bool              `yaml:"venv"`
+	RequirementsFile string            `yaml:"requirements_file"`
+	Entrypoint       string            `yaml:"entrypoint"`
+	Ports            []string          `yaml:"ports"`
+	Env              map[string]string `yaml:"env"`
+	Volumes          []string          `yaml:"volumes"`
+
+	Extra map[string]any `yaml:"-"`
 }
 
 func (v *AppVariant) UnmarshalYAML(node *yaml.Node) error {
@@ -169,11 +194,74 @@ func (v *AppVariant) UnmarshalYAML(node *yaml.Node) error {
 		v.BuildArgs = out
 	}
 
+	if xs, ok := m["system_packages"].([]any); ok {
+		var out []string
+		for _, x := range xs {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		v.SystemPackages = out
+	}
+	if s, ok := m["git_repo"].(string); ok {
+		v.GitRepo = s
+	}
+	if s, ok := m["git_ref"].(string); ok {
+		v.GitRef = s
+	}
+	if s, ok := m["app_root"].(string); ok {
+		v.AppRoot = s
+	}
+	if b, ok := m["venv"].(bool); ok {
+		v.Venv = b
+	}
+	if s, ok := m["requirements_file"].(string); ok {
+		v.RequirementsFile = s
+	}
+	if s, ok := m["entrypoint"].(string); ok {
+		v.Entrypoint = s
+	}
+	if xs, ok := m["ports"].([]any); ok {
+		var out []string
+		for _, x := range xs {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		v.Ports = out
+	}
+	if mm, ok := m["env"].(map[string]any); ok {
+		out := map[string]string{}
+		for k, val := range mm {
+			out[k] = fmt.Sprint(val)
+		}
+		v.Env = out
+	}
+	if xs, ok := m["volumes"].([]any); ok {
+		var out []string
+		for _, x := range xs {
+			if s, ok := x.(string); ok {
+				out = append(out, s)
+			}
+		}
+		v.Volumes = out
+	}
+
 	delete(m, "name")
 	delete(m, "base_ref")
 	delete(m, "hardware")
 	delete(m, "additional_packages")
 	delete(m, "build_args")
+	delete(m, "system_packages")
+	delete(m, "git_repo")
+	delete(m, "git_ref")
+	delete(m, "app_root")
+	delete(m, "venv")
+	delete(m, "requirements_file")
+	delete(m, "entrypoint")
+	delete(m, "ports")
+	delete(m, "env")
+	delete(m, "volumes")
 	v.Extra = m
 	return nil
 }

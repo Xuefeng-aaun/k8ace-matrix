@@ -19,8 +19,21 @@ type BuildUnit struct {
 	BaseImageDest string
 	AppImageDest  string
 
+	BaseBuildArgs      map[string]string
 	BuildArgs          map[string]string
 	AdditionalPackages []string
+
+	// 结构化 Dockerfile 字段
+	SystemPackages  []string
+	GitRepo         string
+	GitRef          string
+	AppRoot         string
+	Venv            bool
+	RequirementsFile string
+	Entrypoint      string
+	Ports           []string
+	Env             map[string]string
+	Volumes         []string
 }
 
 type AppSpec struct {
@@ -100,7 +113,7 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 						return nil, fmt.Errorf("no base variant for %s", v.BaseRef)
 					}
 
-					baseSource := buildBaseSourceImage(baseDef.Source, baseVar.TagSuffix)
+					baseSource := buildBaseSourceImage(baseDef.Source, baseVar)
 					baseDest := fmt.Sprintf("%s/%s-%s", regPrefix, v.BaseRef, baseVar.TagSuffix)
 
 					appDest := spec.FullImage
@@ -108,8 +121,13 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 						appDest = fmt.Sprintf("%s/%s%s-%s-%s-%s", regPrefix, spec.Name, ver, hw, sanitizeName(v.Name), versionSuffix)
 					}
 
-					buildArgs := map[string]string{}
+					baseBuildArgs := map[string]string{}
 					for k, val := range m.BuildArgsOverride[hw] {
+						baseBuildArgs[k] = val
+					}
+
+					buildArgs := map[string]string{}
+					for k, val := range baseBuildArgs {
 						buildArgs[k] = val
 					}
 					for k, val := range v.BuildArgs {
@@ -130,8 +148,19 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 						BaseSourceImage:    baseSource,
 						BaseImageDest:      baseDest,
 						AppImageDest:       appDest,
+						BaseBuildArgs:      baseBuildArgs,
 						BuildArgs:          buildArgs,
 						AdditionalPackages: v.AdditionalPackages,
+						SystemPackages:     v.SystemPackages,
+						GitRepo:            v.GitRepo,
+						GitRef:             v.GitRef,
+						AppRoot:            v.AppRoot,
+						Venv:               v.Venv,
+						RequirementsFile:   v.RequirementsFile,
+						Entrypoint:         v.Entrypoint,
+						Ports:              v.Ports,
+						Env:                v.Env,
+						Volumes:            v.Volumes,
 					})
 				}
 			}
@@ -177,16 +206,24 @@ func pickBaseVariant(vars []matrix.BaseVariant, hw string) (matrix.BaseVariant, 
 	return vars[0], true
 }
 
-func buildBaseSourceImage(source, tagSuffix string) string {
+func buildBaseSourceImage(source string, baseVar matrix.BaseVariant) string {
 	source = strings.TrimSpace(source)
-	tagSuffix = strings.TrimSpace(tagSuffix)
+	upstreamOverride := false
+	if upstreamSource, ok := baseVar.GetString("upstream_source"); ok && strings.TrimSpace(upstreamSource) != "" {
+		source = strings.TrimSpace(upstreamSource)
+		upstreamOverride = true
+	}
+	tagSuffix := strings.TrimSpace(baseVar.TagSuffix)
+	if upstreamTag, ok := baseVar.GetString("upstream_tag"); ok && strings.TrimSpace(upstreamTag) != "" {
+		tagSuffix = strings.TrimSpace(upstreamTag)
+	}
 	if source == "" {
 		return tagSuffix
 	}
 	if tagSuffix == "" {
 		return source
 	}
-	if strings.Contains(source, ":") {
+	if !upstreamOverride && strings.Contains(source, ":") {
 		return source
 	}
 	return source + ":" + tagSuffix

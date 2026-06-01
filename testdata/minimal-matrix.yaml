@@ -1,6 +1,6 @@
 schema_version: "1.0"
 project: "k8ace-matrix"
-registry_prefix: "k8ace"
+registry_prefix: "172.20.47.182:5000/k8ace"
 
 build_pipeline:
   stages:
@@ -57,7 +57,20 @@ ci_cd:
     namespace: "default"
     service_account: "argo-workflow"
     kaniko_image: "kaniko:test"
+    build_context:
+      default: "s3://kaniko-contexts/testdata/context.tar.gz"
+      env:
+        AWS_REGION: "us-east-1"
+        S3_ENDPOINT: "http://172.20.47.182:9000"
+        S3_FORCE_PATH_STYLE: "true"
+      secret_name: "context-creds"
+      secret_env:
+        AWS_ACCESS_KEY_ID: "accessKey"
+        AWS_SECRET_ACCESS_KEY: "secretKey"
+    insecure_registries:
+      - "172.20.47.182:5000"
+    skip_push_permission_check: true
     registry_secret_name: "regcred"
     cache:
-      enabled: true
+      enabled: false
       repo_template: "{{ .RegistryPrefix }}/cache/{{ .Hardware }}/{{ .Stage }}"

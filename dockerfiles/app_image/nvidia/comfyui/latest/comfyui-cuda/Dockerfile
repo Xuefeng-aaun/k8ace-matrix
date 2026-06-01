@@ -1,31 +1,38 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
-ARG COMFYUI_REPO=https://github.com/comfyanonymous/ComfyUI.git
-ARG COMFYUI_REF=master
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
 
-ENV COMFYUI_ROOT=/opt/comfyui
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    COMFYUI_ROOT=/opt/comfyui \
+    PYTHONPATH=/opt/comfyui \
+    K8ACE_HACK_ROOT=/opt/k8ace/hack \
+    PORT=8188 \
+    LISTEN=0.0.0.0
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends git && \
-    rm -rf /var/lib/apt/lists/*
+RUN python3 -m pip install --upgrade pip && \
+    python3 -m pip install \
+      --index-url https://download.pytorch.org/whl/cu124 \
+      torch==2.5.1 \
+      torchvision==0.20.1 \
+      torchaudio==2.5.1 && \
+    git clone --depth 1 --branch v0.22.0 https://github.com/comfy-org/ComfyUI.git ${COMFYUI_ROOT} && \
+    python3 -m pip install \
+      --index-url https://pypi.org/simple \
+      -r ${COMFYUI_ROOT}/requirements.txt
 
-RUN git clone "${COMFYUI_REPO}" "${COMFYUI_ROOT}" && \
-    cd "${COMFYUI_ROOT}" && \
-    git checkout "${COMFYUI_REF}"
+RUN mkdir -p /opt/k8ace/hack/test /opt/k8ace/hack/lib /opt/k8ace/hack/images/comfyui
+COPY hack/test/smoke.sh /opt/k8ace/hack/test/smoke.sh
+COPY hack/lib/ /opt/k8ace/hack/lib/
+COPY hack/images/comfyui/entrypoint.sh /opt/k8ace/hack/images/comfyui/entrypoint.sh
+RUN chmod +x /opt/k8ace/hack/test/smoke.sh /opt/k8ace/hack/images/comfyui/entrypoint.sh
 
-RUN python3 -m venv "${COMFYUI_ROOT}/venv" && \
-    "${COMFYUI_ROOT}/venv/bin/python" -m pip install -U pip && \
-    "${COMFYUI_ROOT}/venv/bin/pip" install --index-url "${TORCH_INDEX_URL}" torch torchvision torchaudio && \
-    if [ -f "${COMFYUI_ROOT}/requirements.txt" ]; then "${COMFYUI_ROOT}/venv/bin/pip" install -r "${COMFYUI_ROOT}/requirements.txt"; fi
-
-ENV PATH=${COMFYUI_ROOT}/venv/bin:${PATH}
-
-COPY hack/images/comfyui /opt/k8ace/hack/images/comfyui
-RUN chmod +x /opt/k8ace/hack/images/comfyui/entrypoint.sh
-
+WORKDIR /opt/comfyui
 EXPOSE 8188
-
 ENTRYPOINT ["/opt/k8ace/hack/images/comfyui/entrypoint.sh"]
-
