@@ -46,9 +46,19 @@ type Task struct {
 	App       string
 	DependsOn []string
 
-	Kaniko       KanikoSpec
-	TestImage    string
-	TestCommands []string
+	Kaniko               KanikoSpec
+	HostDriver           HostDriverSpec
+	TestImage            string
+	TestCommands         []string
+	TestResourceLimits   map[string]string
+	TestResourceRequests map[string]string
+}
+
+type HostDriverSpec struct {
+	Image            string
+	Commands         []string
+	ResourceLimits   map[string]string
+	ResourceRequests map[string]string
 }
 
 type KanikoSpec struct {
@@ -270,7 +280,7 @@ func resolveStages(m *matrix.Matrix, requested []string) ([]matrix.Stage, error)
 		}
 	} else {
 		for _, s := range requested {
-			stageName := strings.TrimSpace(s)
+			stageName := normalizeStageRequest(s)
 			if stageName == "" {
 				continue
 			}
@@ -292,6 +302,20 @@ func resolveStages(m *matrix.Matrix, requested []string) ([]matrix.Stage, error)
 	}
 
 	return stages, nil
+}
+
+func normalizeStageRequest(stageName string) string {
+	stageName = strings.TrimSpace(stageName)
+	switch strings.ToLower(stageName) {
+	case "base":
+		return "base_test"
+	case "app":
+		return "app_test"
+	case "test":
+		return "app_test"
+	default:
+		return stageName
+	}
 }
 
 func resolveDockerfileOverride(requested []string, dockerfile string) (string, string, error) {
@@ -349,6 +373,8 @@ func buildStageTask(
 	}
 
 	switch stageName {
+	case "host_driver":
+		task.HostDriver = buildHostDriverSpec(u)
 	case "base_image":
 		task.Kaniko.Dockerfile = fmt.Sprintf("dockerfiles/base_image/%s/%s/%s/Dockerfile", u.Hardware, u.BaseRef, u.BaseVariant.TagSuffix)
 		task.Kaniko.Destination = u.BaseImageDest
@@ -357,6 +383,12 @@ func buildStageTask(
 			task.Kaniko.BuildArgs[k] = v
 		}
 		task.Kaniko.BuildArgs["BASE_IMAGE"] = u.BaseSourceImage
+	case "base_test":
+		task.TestImage = u.BaseImageDest
+		task.TestCommands = []string{
+			baseRuntimeSmokeCommand(u),
+		}
+		applyTestResources(&task, u)
 	case "app_image":
 		task.Kaniko.Dockerfile = fmt.Sprintf("dockerfiles/app_image/%s/%s/%s/%s/Dockerfile", u.Hardware, u.AppName, u.AppVersion, sanitizeName(u.VariantName))
 		task.Kaniko.Destination = u.AppImageDest
@@ -365,11 +397,12 @@ func buildStageTask(
 			task.Kaniko.BuildArgs[k] = v
 		}
 		task.Kaniko.BuildArgs["BASE_IMAGE"] = u.BaseImageDest
-	case "test":
+	case "app_test":
 		task.TestImage = u.AppImageDest
 		task.TestCommands = []string{
-			fmt.Sprintf("if [ -f /opt/k8ace/hack/test/smoke.sh ]; then bash /opt/k8ace/hack/test/smoke.sh L1 %s %s; else python3 --version && (pip list --format=columns 2>/dev/null || pip3 list --format=columns 2>/dev/null || true); fi", u.AppName, u.Hardware),
+			fmt.Sprintf("if [ -f /opt/k8ace/hack/test/smoke.sh ]; then bash /opt/k8ace/hack/test/smoke.sh L2 %s %s; else python3 --version && (pip list --format=columns 2>/dev/null || pip3 list --format=columns 2>/dev/null || true); fi", u.AppName, u.Hardware),
 		}
+		applyTestResources(&task, u)
 		task.Kaniko.Image = u.AppImageDest
 		task.Kaniko.NoPush = true
 		task.Kaniko.Cache.Enabled = false
@@ -392,11 +425,40 @@ func taskNameForStage(stageName string, u BuildUnit) string {
 	switch stageName {
 	case "base_image":
 		return sanitizeName(strings.Join([]string{"base-image", u.Hardware, u.BaseRef, u.BaseVariant.TagSuffix}, "-"))
+	case "base_test":
+		return sanitizeName(strings.Join([]string{"base-test", u.Hardware, u.BaseRef, u.BaseVariant.TagSuffix}, "-"))
 	case "app_image":
 		return sanitizeName(strings.Join([]string{"app-image", u.Hardware, u.AppName, u.AppVersion, u.VariantName}, "-"))
+	case "app_test":
+		return sanitizeName(strings.Join([]string{"app-test", u.Hardware, u.AppName, u.AppVersion, u.VariantName}, "-"))
 	default:
 		return sanitizeName(strings.Join([]string{stageName, u.Hardware, u.AppName, u.AppVersion, u.VariantName}, "-"))
 	}
+}
+
+func applyTestResources(task *Task, u BuildUnit) {
+	if strings.EqualFold(strings.TrimSpace(u.Hardware), "nvidia") {
+		task.TestResourceLimits = map[string]string{"nvidia.com/gpu": "1"}
+		task.TestResourceRequests = map[string]string{"nvidia.com/gpu": "1"}
+	}
+}
+
+func baseRuntimeSmokeCommand(u BuildUnit) string {
+	if !strings.EqualFold(strings.TrimSpace(u.Hardware), "nvidia") {
+		return fmt.Sprintf("echo '[base_test] unsupported hardware=%s'; exit 1", shellQuote(u.Hardware))
+	}
+
+	return `set -eu
+echo "[base_test] NVIDIA CUDA runtime smoke"
+python3 --version
+(pip --version || pip3 --version)
+command -v nvidia-smi
+nvidia-smi -L | grep -q '^GPU '
+nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1 | grep -Eq '^[0-9]+(\.[0-9]+)+'
+ldconfig -p 2>/dev/null | grep -q 'libcuda.so.1' || test -e /usr/lib/x86_64-linux-gnu/libcuda.so.1 || test -e /usr/local/cuda/compat/libcuda.so.1
+ldconfig -p 2>/dev/null | grep -Eq 'libcudart\.so|libcuda\.so' || find /usr /opt /workspace \( -name 'libcudart.so*' -o -name 'libcuda.so*' \) 2>/dev/null | head -n1 | grep -q .
+echo "[base_test] PASS: base image can see NVIDIA CUDA runtime"
+`
 }
 
 func stageByName(stages []matrix.Stage, stageName string) (matrix.Stage, bool) {

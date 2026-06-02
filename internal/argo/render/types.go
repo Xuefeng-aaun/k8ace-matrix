@@ -65,7 +65,13 @@ type Container struct {
 	Command      []string      `yaml:"command,omitempty"`
 	Args         []string      `yaml:"args,omitempty"`
 	Env          []EnvVar      `yaml:"env,omitempty"`
+	Resources    *Resources    `yaml:"resources,omitempty"`
 	VolumeMounts []VolumeMount `yaml:"volumeMounts,omitempty"`
+}
+
+type Resources struct {
+	Limits   map[string]string `yaml:"limits,omitempty"`
+	Requests map[string]string `yaml:"requests,omitempty"`
 }
 
 type EnvVar struct {

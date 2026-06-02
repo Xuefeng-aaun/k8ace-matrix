@@ -12,6 +12,8 @@ type BuildUnit struct {
 	AppName         string
 	AppVersion      string
 	VariantName     string
+	Runtime         string
+	Accelerator     string
 	BaseRef         string
 	BaseVariant     matrix.BaseVariant
 	BaseSourceImage string
@@ -24,16 +26,16 @@ type BuildUnit struct {
 	AdditionalPackages []string
 
 	// 结构化 Dockerfile 字段
-	SystemPackages  []string
-	GitRepo         string
-	GitRef          string
-	AppRoot         string
-	Venv            bool
+	SystemPackages   []string
+	GitRepo          string
+	GitRef           string
+	AppRoot          string
+	Venv             bool
 	RequirementsFile string
-	Entrypoint      string
-	Ports           []string
-	Env             map[string]string
-	Volumes         []string
+	Entrypoint       string
+	Ports            []string
+	Env              map[string]string
+	Volumes          []string
 }
 
 type AppSpec struct {
@@ -97,6 +99,9 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 			versions := specVersions(appDef, spec.Version)
 			for _, ver := range versions {
 				for _, v := range appDef.Variants {
+					if strings.TrimSpace(v.AppVersion) != "" && !strings.EqualFold(strings.TrimSpace(v.AppVersion), strings.TrimSpace(ver)) {
+						continue
+					}
 					if !containsFold(v.Hardware, hw) {
 						continue
 					}
@@ -143,6 +148,8 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 						AppName:            spec.Name,
 						AppVersion:         ver,
 						VariantName:        v.Name,
+						Runtime:            v.Runtime,
+						Accelerator:        v.Accelerator,
 						BaseRef:            v.BaseRef,
 						BaseVariant:        baseVar,
 						BaseSourceImage:    baseSource,

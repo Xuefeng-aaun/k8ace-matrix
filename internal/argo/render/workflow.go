@@ -99,6 +99,11 @@ func taskTemplates(tasks []pipeline.Task, contextEnv []EnvVar, registrySecretNam
 
 	out := make([]Template, 0, len(tasks))
 	for _, task := range tasks {
+		if len(task.HostDriver.Commands) > 0 {
+			out = append(out, hostDriverTemplate(task))
+			continue
+		}
+
 		if task.TestImage != "" {
 			out = append(out, testTemplate(task))
 			continue
@@ -125,6 +130,26 @@ func taskTemplates(tasks []pipeline.Task, contextEnv []EnvVar, registrySecretNam
 	return out
 }
 
+func hostDriverTemplate(task pipeline.Task) Template {
+	script := fmt.Sprintf("echo '[host_driver] stage=%s task=%s';\n", task.Stage, task.Name)
+	for _, cmd := range task.HostDriver.Commands {
+		script += cmd + "\n"
+	}
+
+	return Template{
+		Name: task.Name,
+		Container: &Container{
+			Image:   firstNonEmptyImage(task.HostDriver.Image, "alpine:3.20"),
+			Command: []string{"sh", "-c"},
+			Args:    []string{script},
+			Resources: resourceRequirements(
+				task.HostDriver.ResourceLimits,
+				task.HostDriver.ResourceRequests,
+			),
+		},
+	}
+}
+
 func noopTemplate(task pipeline.Task) Template {
 	return Template{
 		Name: task.Name,
@@ -141,13 +166,45 @@ func noopTemplate(task pipeline.Task) Template {
 	}
 }
 
-func testTemplate(task pipeline.Task) Template {
-	script := fmt.Sprintf("echo '[test] stage=%s task=%s image=%s';\n", task.Stage, task.Name, task.TestImage)
-	for _, cmd := range task.TestCommands {
-		script += fmt.Sprintf("echo '[test] running: %s';\n", cmd)
-		script += cmd + " || { echo '[test] FAILED: " + cmd + "'; exit 1; };\n"
+func resourceRequirements(limits, requests map[string]string) *Resources {
+	if len(limits) == 0 && len(requests) == 0 {
+		return nil
 	}
-	script += "echo '[test] ALL PASSED';\n"
+	return &Resources{
+		Limits:   cleanResourceMap(limits),
+		Requests: cleanResourceMap(requests),
+	}
+}
+
+func cleanResourceMap(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for key, value := range in {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func testTemplate(task pipeline.Task) Template {
+	label := strings.TrimSpace(task.Stage)
+	if label == "" {
+		label = "test"
+	}
+
+	script := fmt.Sprintf("echo '[%s] task=%s image=%s';\n", label, task.Name, task.TestImage)
+	for idx, cmd := range task.TestCommands {
+		checkNo := idx + 1
+		script += fmt.Sprintf("echo '[%s] running check %d';\n", label, checkNo)
+		script += "(\n" + cmd + "\n) || { echo '[" + label + "] FAILED check " + fmt.Sprint(checkNo) + "'; exit 1; };\n"
+	}
+	script += fmt.Sprintf("echo '[%s] ALL PASSED';\n", label)
 
 	return Template{
 		Name: task.Name,
@@ -155,6 +212,10 @@ func testTemplate(task pipeline.Task) Template {
 			Image:   task.TestImage,
 			Command: []string{"sh", "-c"},
 			Args:    []string{script},
+			Resources: resourceRequirements(
+				task.TestResourceLimits,
+				task.TestResourceRequests,
+			),
 		},
 	}
 }

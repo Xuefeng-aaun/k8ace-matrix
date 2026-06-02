@@ -15,7 +15,7 @@ func TestBuildPlansResolvesStageDependencies(t *testing.T) {
 		AppName:       "demo",
 		AppVersion:    "1.0.0",
 		Variant:       "demo-cuda",
-		Stages:        []string{"app_image"},
+		Stages:        []string{"app"},
 		VersionSuffix: "dev",
 		Builder:       "kaniko",
 		KanikoImage:   "kaniko:test",
@@ -35,7 +35,7 @@ func TestBuildPlansResolvesStageDependencies(t *testing.T) {
 		taskByStage[task.Stage] = task
 	}
 
-	wantStages := []string{"host_driver", "base_image", "app_image"}
+	wantStages := []string{"host_driver", "base_image", "base_test", "app_image", "app_test"}
 	if len(gotStages) != len(wantStages) {
 		t.Fatalf("resolved stages = %v, want %v", gotStages, wantStages)
 	}
@@ -51,22 +51,29 @@ func TestBuildPlansResolvesStageDependencies(t *testing.T) {
 	if deps := taskByStage["base_image"].DependsOn; len(deps) != 1 || deps[0] != taskByStage["host_driver"].Name {
 		t.Fatalf("base_image depends_on = %v, want [%s]", deps, taskByStage["host_driver"].Name)
 	}
-	if deps := taskByStage["app_image"].DependsOn; len(deps) != 1 || deps[0] != taskByStage["base_image"].Name {
-		t.Fatalf("app_image depends_on = %v, want [%s]", deps, taskByStage["base_image"].Name)
+	if deps := taskByStage["base_test"].DependsOn; len(deps) != 1 || deps[0] != taskByStage["base_image"].Name {
+		t.Fatalf("base_test depends_on = %v, want [%s]", deps, taskByStage["base_image"].Name)
+	}
+	if deps := taskByStage["app_image"].DependsOn; len(deps) != 1 || deps[0] != taskByStage["base_test"].Name {
+		t.Fatalf("app_image depends_on = %v, want [%s]", deps, taskByStage["base_test"].Name)
+	}
+	if deps := taskByStage["app_test"].DependsOn; len(deps) != 1 || deps[0] != taskByStage["app_image"].Name {
+		t.Fatalf("app_test depends_on = %v, want [%s]", deps, taskByStage["app_image"].Name)
 	}
 
-	if got := taskByStage["host_driver"].Kaniko.Dockerfile; got != "" {
-		t.Fatalf("host_driver dockerfile = %q, want empty", got)
+	hostDriver := taskByStage["host_driver"].HostDriver
+	if len(hostDriver.Commands) == 0 {
+		t.Fatalf("host_driver commands are empty")
 	}
-	if got := taskByStage["host_driver"].Kaniko.Image; got != "alpine:3.20" {
-		t.Fatalf("host_driver image = %q, want alpine:3.20", got)
+	if !strings.Contains(hostDriver.Commands[0], "nvidia-smi") {
+		t.Fatalf("host_driver should check nvidia-smi, got %q", hostDriver.Commands[0])
 	}
-	if taskByStage["host_driver"].Kaniko.Cache.Enabled {
-		t.Fatalf("host_driver cache enabled = true, want false")
+	if got := hostDriver.ResourceLimits["nvidia.com/gpu"]; got != "1" {
+		t.Fatalf("host_driver gpu limit = %q, want 1", got)
 	}
 }
 
-func TestBuildPlansTestStageRunsSmokeHelperWhenAvailable(t *testing.T) {
+func TestBuildPlansAppTestStageRunsSmokeHelperWhenAvailable(t *testing.T) {
 	m := testMatrix()
 
 	plans, err := BuildPlans(m, Selection{
@@ -74,7 +81,7 @@ func TestBuildPlansTestStageRunsSmokeHelperWhenAvailable(t *testing.T) {
 		AppName:       "demo",
 		AppVersion:    "1.0.0",
 		Variant:       "demo-cuda",
-		Stages:        []string{"test"},
+		Stages:        []string{"app_test"},
 		VersionSuffix: "dev",
 		Builder:       "kaniko",
 		KanikoImage:   "kaniko:test",
@@ -88,18 +95,50 @@ func TestBuildPlansTestStageRunsSmokeHelperWhenAvailable(t *testing.T) {
 		taskByStage[task.Stage] = task
 	}
 
-	testTask, ok := taskByStage["test"]
+	testTask, ok := taskByStage["app_test"]
 	if !ok {
-		t.Fatalf("test stage not generated; stages=%v", taskByStage)
+		t.Fatalf("app_test stage not generated; stages=%v", taskByStage)
 	}
 	if len(testTask.TestCommands) != 1 {
-		t.Fatalf("test commands = %v, want one smoke command", testTask.TestCommands)
+		t.Fatalf("app_test commands = %v, want one smoke command", testTask.TestCommands)
 	}
 	if !strings.Contains(testTask.TestCommands[0], "/opt/k8ace/hack/test/smoke.sh") {
-		t.Fatalf("test command should call smoke helper, got %q", testTask.TestCommands[0])
+		t.Fatalf("app_test command should call smoke helper, got %q", testTask.TestCommands[0])
 	}
-	if !strings.Contains(testTask.TestCommands[0], "L1 demo nvidia") {
-		t.Fatalf("test command should pass app+hardware to smoke helper, got %q", testTask.TestCommands[0])
+	if !strings.Contains(testTask.TestCommands[0], "L2 demo nvidia") {
+		t.Fatalf("app_test command should pass app+hardware to smoke helper, got %q", testTask.TestCommands[0])
+	}
+}
+
+func TestBuildPlansBaseAliasExpandsToHostDriverBaseAndBaseTest(t *testing.T) {
+	m := testMatrix()
+
+	plans, err := BuildPlans(m, Selection{
+		Hardwares:     []string{"nvidia"},
+		AppName:       "demo",
+		AppVersion:    "1.0.0",
+		Variant:       "demo-cuda",
+		Stages:        []string{"base"},
+		VersionSuffix: "dev",
+		Builder:       "kaniko",
+		KanikoImage:   "kaniko:test",
+	})
+	if err != nil {
+		t.Fatalf("BuildPlans() error = %v", err)
+	}
+
+	var gotStages []string
+	for _, task := range plans[0].Tasks {
+		gotStages = append(gotStages, task.Stage)
+	}
+	wantStages := []string{"host_driver", "base_image", "base_test"}
+	if len(gotStages) != len(wantStages) {
+		t.Fatalf("resolved stages = %v, want %v", gotStages, wantStages)
+	}
+	for i := range wantStages {
+		if gotStages[i] != wantStages[i] {
+			t.Fatalf("resolved stages = %v, want %v", gotStages, wantStages)
+		}
 	}
 }
 
@@ -203,8 +242,9 @@ func testMatrix() *matrix.Matrix {
 			Stages: []matrix.Stage{
 				{Name: "host_driver"},
 				{Name: "base_image", DependsOn: []string{"host_driver"}},
-				{Name: "app_image", DependsOn: []string{"base_image"}},
-				{Name: "test", DependsOn: []string{"app_image"}},
+				{Name: "base_test", DependsOn: []string{"base_image"}},
+				{Name: "app_image", DependsOn: []string{"base_test"}},
+				{Name: "app_test", DependsOn: []string{"app_image"}},
 			},
 			Cache: matrix.Cache{
 				Type:        "registry",
@@ -229,9 +269,10 @@ func testMatrix() *matrix.Matrix {
 					Versions: []string{"1.0.0"},
 					Variants: []matrix.AppVariant{
 						{
-							Name:     "demo-cuda",
-							BaseRef:  "cuda_base",
-							Hardware: []string{"nvidia"},
+							Name:        "demo-cuda",
+							Accelerator: "cuda-124",
+							BaseRef:     "cuda_base",
+							Hardware:    []string{"nvidia"},
 						},
 					},
 				},

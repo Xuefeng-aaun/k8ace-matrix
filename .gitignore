@@ -11,10 +11,11 @@ bin/
 dist/context/
 dist/argo/
 dist/argo-*/
+dist/batch-plan*/
 *.local.yaml
 *.local.yaml.bak*
 *.bak
 *.bak.*
 .backups/
 docx/
-matrix-ci
+/matrix-ci

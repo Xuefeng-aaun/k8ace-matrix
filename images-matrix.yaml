@@ -2,12 +2,12 @@
 # K8Ace Matrix 最小生产矩阵
 # ==============================================================================
 #
-# 这份文件是需要人工长期维护的“静态资产”，不是 Dockerfile 自动生成器。
+# 这份文件是需要人工长期维护的静态资产，不是 Dockerfile 自动生成器。
 #
 # 当前职责：
 # 1. 记录仓库当前支持哪些 base image。
-# 2. 记录仓库当前支持哪些 app / version / variant。
-# 3. 记录 base 与 app 的依赖关系。
+# 2. 记录仓库当前支持哪些 app / type / version / runtime / accelerator。
+# 3. 记录 app 与精确 base_ref 的依赖关系。
 # 4. 记录 Argo / Kaniko / MinIO / Registry 等产线运行参数。
 # 5. 给 batch plan 提供合法目标，供 matrix-ci 解析和渲染 Workflow。
 #
@@ -18,7 +18,7 @@
 #
 # 使用顺序建议：
 # 1. 先写好 Dockerfile。
-# 2. 再把 app / base 关系登记到本文件。
+# 2. 再把 app / type / version / runtime / base_ref 关系登记到本文件。
 # 3. 再写 batch-plan*.tsv 选择本轮要跑的目标。
 # 4. 最后用 matrix-ci batch 渲染并创建 Argo Workflow。
 # ==============================================================================
@@ -40,22 +40,27 @@ registry_prefix: "172.20.47.182:5000/k8ace"
 # 一、基础镜像矩阵
 # ==============================================================================
 #
-# base_image_matrix 用来登记“共享基础镜像”。
+# base_image_matrix 用来登记共享基础镜像。
 #
-# 当前只保留 NVIDIA CUDA 12.4 这一条主线。app image 会基于这里产出的 base image
-# 继续构建，而不是每个 app 都从上游 nvidia/cuda 重新开始。
+# 这里的 key 必须尽量精确，不再使用过于宽泛的 cuda_base。
+# 例如：
+# - cuda118_base
+# - cuda121_base
+# - cuda124_base
+# - cuda131_base
+#
+# 这样 app 的 base_ref 能直接说明自己依赖哪一条 CUDA 基础环境。
 # ==============================================================================
 base_image_matrix:
-  # cuda_base 是 base_ref 名称。
-  # application_matrix 里的 app variant 会通过 base_ref: "cuda_base" 指向这里。
-  cuda_base:
+  # CUDA 12.4 基础镜像。
+  # application_matrix 中依赖 CUDA 12.4 的应用，都应显式写 base_ref: "cuda124_base"。
+  cuda124_base:
     # source 是当前 base 的上游来源。
     # 这里没有直接写 nvidia/cuda，而是写本地 Registry 里的 upstream 镜像。
     # 这样做的好处是：Kaniko 构建时优先从本地仓库拉取，减少 Docker Hub 网络波动。
     source: "172.20.47.182:5000/k8ace/upstream/nvidia-cuda"
 
-    # variants 表示同一种 base_ref 下的不同版本。
-    # 当前只有 cuda12.4-devel-ubuntu22.04。
+    # variants 表示同一种 base_ref 下的具体镜像版本。
     variants:
       # tag_suffix 是本项目内部识别 base 版本的关键字段。
       # 它会参与 base 镜像名、app 依赖选择和 batch 渲染。
@@ -68,6 +73,8 @@ base_image_matrix:
         # 以下字段主要用于人工理解和后续扩展。
         # 当前 Dockerfile 内容才是真正的环境定义，矩阵字段只做登记和说明。
         cuda_version: "12.4"
+        cuda_short: "cuda124"
+        min_driver_linux: "550.54.15"
         ubuntu_version: "22.04"
         python_version: "3.10"
 
@@ -83,18 +90,28 @@ base_image_matrix:
 # 二、应用矩阵
 # ==============================================================================
 #
-# application_matrix 用来登记“仓库当前承诺支持的应用目标”。
+# application_matrix 用来登记仓库当前承诺支持的应用目标。
 #
-# 注意：
-# 1. 这里不描述完整安装逻辑。
-# 2. 这里不替代 Dockerfile。
-# 3. 这里只负责把 app / version / variant / base_ref / hardware 关系登记清楚。
+# 新结构按下面的层级维护：
+#
+# app_name
+#   -> type
+#   -> versions
+#      -> app_version
+#         -> runtimes
+#            -> runtime
+#               -> accelerator_version
+#
+# 这样可以明确回答：
+# 1. 这个应用是什么类型：service / cli / runtime / workspace。
+# 2. 这个应用具体是什么版本，不再使用 latest。
+# 3. 这个应用跑在哪类运行时上，比如 cuda。
+# 4. 这个应用绑定哪条 CUDA 版本，比如 cuda-124。
+# 5. 这个应用依赖哪一个精确 base_ref，比如 cuda124_base。
 #
 # batch plan 中的 app_name、app_version、variant 必须能在这里找到唯一匹配项。
 # ==============================================================================
 application_matrix:
-  # practical_apps 是当前实战批次分组。
-  # 后续可以按用途扩展分组，比如 framework_apps / webui_apps / runtime_apps。
   practical_apps:
     # --------------------------------------------------------------------------
     # ComfyUI
@@ -102,28 +119,38 @@ application_matrix:
     # 类型：service
     # 定位：可直接 docker run 落地的 WebUI 服务镜像。
     # Dockerfile 路径：
-    # dockerfiles/app_image/nvidia/comfyui/latest/comfyui-cuda/Dockerfile
+    # dockerfiles/app_image/nvidia/comfyui/0.22.0/comfyui-service-cuda124/Dockerfile
     comfyui:
-      versions: ["latest"]
-      variants:
-        - name: "comfyui-cuda"
-          base_ref: "cuda_base"
-          hardware: ["nvidia"]
+      type: "service"
+      versions:
+        "0.22.0":
+          runtimes:
+            cuda:
+              cuda-124:
+                # name 是 matrix-ci 中的 variant 名称。
+                # 命名规则建议：应用名-类型-运行时短名。
+                name: "comfyui-service-cuda124"
+                base_ref: "cuda124_base"
+                hardware: ["nvidia"]
 
     # --------------------------------------------------------------------------
     # LLaMA-Factory
     # --------------------------------------------------------------------------
-    # 类型：cli，兼具 service 候选形态。
+    # 类型：cli
     # 定位：训练/微调工具镜像。当前 L1 以 llamafactory-cli version/help 做轻量验收。
     # 注意：默认 WebUI 直跑仍可能受到上游依赖版本组合影响。
     # Dockerfile 路径：
-    # dockerfiles/app_image/nvidia/llama_factory/0.9.0/llamafactory-cuda/Dockerfile
+    # dockerfiles/app_image/nvidia/llama_factory/0.9.0/llama-factory-cli-cuda124/Dockerfile
     llama_factory:
-      versions: ["0.9.0"]
-      variants:
-        - name: "llamafactory-cuda"
-          base_ref: "cuda_base"
-          hardware: ["nvidia"]
+      type: "cli"
+      versions:
+        "0.9.0":
+          runtimes:
+            cuda:
+              cuda-124:
+                name: "llama-factory-cli-cuda124"
+                base_ref: "cuda124_base"
+                hardware: ["nvidia"]
 
     # --------------------------------------------------------------------------
     # Stable Diffusion Runtime
@@ -131,15 +158,18 @@ application_matrix:
     # 类型：runtime
     # 定位：diffusers / StableDiffusion3Pipeline 运行时环境。
     # 注意：它不是默认可直接启动网页的 service image。
-    # 如果后续要做服务镜像，需要先明确采用 FastAPI、Gradio、WebUI 还是 CLI 形态。
     # Dockerfile 路径：
-    # dockerfiles/app_image/nvidia/stable_diffusion/3.5/sd-cuda/Dockerfile
+    # dockerfiles/app_image/nvidia/stable_diffusion/3.5/stable-diffusion-runtime-cuda124/Dockerfile
     stable_diffusion:
-      versions: ["3.5"]
-      variants:
-        - name: "sd-cuda"
-          base_ref: "cuda_base"
-          hardware: ["nvidia"]
+      type: "runtime"
+      versions:
+        "3.5":
+          runtimes:
+            cuda:
+              cuda-124:
+                name: "stable-diffusion-runtime-cuda124"
+                base_ref: "cuda124_base"
+                hardware: ["nvidia"]
 
 # ==============================================================================
 # 三、构建阶段定义
@@ -148,18 +178,18 @@ application_matrix:
 # build_pipeline.stages 定义 Argo Workflow 中可出现的阶段。
 #
 # 当前主链：
-# host_driver -> base_image -> app_image -> test -> push
+# host_driver -> base_image -> base_test -> app_image -> app_test
 #
-# batch plan 可以选择只跑其中一部分，例如：
-# - base_image
-# - app_image,test,push
+# batch plan 推荐只写用户意图：
+# - base：自动展开为 host_driver -> base_image -> base_test
+# - app：自动展开为 host_driver -> base_image -> base_test -> app_image -> app_test
 # ==============================================================================
 build_pipeline:
   stages:
-    # host_driver 当前只是占位阶段。
-    # 真实驱动安装不由当前仓库负责，这里保留 stage 是为了保持完整流水线结构。
+    # host_driver 是 NVIDIA CUDA 的前置检查阶段。
+    # 它不会安装驱动，只检查当前节点是否能分配 GPU、读取 nvidia-smi、并满足目标 CUDA 最低驱动版本。
     - name: "host_driver"
-      description: "noop host-driver placeholder"
+      description: "check NVIDIA GPU visibility and CUDA driver compatibility"
       parallel: true
       matrix_dimension: "hardware"
 
@@ -171,28 +201,28 @@ build_pipeline:
       matrix_dimension: "base"
       depends_on: ["host_driver"]
 
+    # base_test 会启动刚构建出的 base image，检查容器内 CUDA runtime 是否可见。
+    # 这一步用于证明 base image 不只是能构建，而且具备后续 app smoke 的硬件运行基础。
+    - name: "base_test"
+      description: "run NVIDIA CUDA runtime smoke checks for the base image"
+      parallel: true
+      matrix_dimension: "base_test"
+      depends_on: ["base_image"]
+
     # app_image 基于已经生产好的 base image 构建应用镜像。
     - name: "app_image"
       description: "build app images from the shared base"
       parallel: true
       matrix_dimension: "app"
-      depends_on: ["base_image"]
+      depends_on: ["base_test"]
 
-    # test 阶段会启动刚构建出的 app 镜像，并执行 hack/test/smoke.sh。
-    # 当前默认走 L1 轻量冒烟测试。
-    - name: "test"
-      description: "run app-specific L1 smoke checks"
+    # app_test 阶段会启动刚构建出的 app 镜像，并执行 hack/test/smoke.sh。
+    # 当前默认走 L2-runtime：先完成 L0/L1，再检查容器内 CUDA runtime 是否可见。
+    - name: "app_test"
+      description: "run app L1 smoke checks and NVIDIA CUDA runtime L2 checks"
       parallel: true
-      matrix_dimension: "test"
+      matrix_dimension: "app_test"
       depends_on: ["app_image"]
-
-    # push 阶段用于保留完整发布链路。
-    # 当前实际镜像推送通常已经在 Kaniko build 阶段完成。
-    - name: "push"
-      description: "finalize image publication"
-      parallel: false
-      matrix_dimension: "registry"
-      depends_on: ["test"]
 
   # cache 是 Kaniko/Registry 缓存的预留配置。
   # 当前 ci_cd.argo_workflows.cache.enabled 为 false，因此这块主要保留为未来扩展说明。
@@ -235,9 +265,9 @@ build_args_overrides:
 # ==============================================================================
 priority_build_list:
   practical:
-    - "k8ace/comfyuilatest-nvidia-comfyui-cuda-latest"
-    - "k8ace/llama_factory0.9.0-nvidia-llamafactory-cuda-latest"
-    - "k8ace/stable_diffusion3.5-nvidia-sd-cuda-latest"
+    - "k8ace/comfyui0.22.0-nvidia-comfyui-service-cuda124-dev"
+    - "k8ace/llama_factory0.9.0-nvidia-llama-factory-cli-cuda124-dev"
+    - "k8ace/stable_diffusion3.5-nvidia-stable-diffusion-runtime-cuda124-dev"
 
 # ==============================================================================
 # 六、命名规则
@@ -246,7 +276,7 @@ priority_build_list:
 # naming_convention 是未来扩展用的命名说明。
 #
 # 当前真实镜像名主要由 pipeline/unit 里的逻辑生成，不完全由这里直接驱动。
-# 因此这里先保留为“命名意图说明”，后续如果要统一命名可以再重构。
+# 因此这里先保留为命名意图说明，后续如果要统一命名可以再重构。
 # ==============================================================================
 naming_convention:
   template: "{{ .RegistryPrefix }}/{{ .AppName }}-{{ .Hardware.Vendor }}-{{ .VersionSuffix }}"
@@ -287,7 +317,7 @@ ci_cd:
 
     # Workflow 内部并发度。
     # 当前设置为 2，避免同时启动过多 Kaniko Pod 给控制面和网络造成压力。
-    parallelism: 2
+    parallelism: 3
 
     # Kaniko 构建上下文配置。
     # matrix-ci batch --create 会先执行 hack/package_context.sh，再上传到这里。

@@ -104,6 +104,51 @@ func TestBuildWorkflowYAML_RendersNoopStageWithoutKaniko(t *testing.T) {
 	}
 }
 
+func TestBuildWorkflowYAML_RendersHostDriverGpuCheck(t *testing.T) {
+	p := &pipeline.Plan{
+		Name: "demo",
+		Tasks: []pipeline.Task{
+			{
+				Name:  "host-driver-nvidia",
+				Stage: "host_driver",
+				HostDriver: pipeline.HostDriverSpec{
+					Image: "nvidia/cuda:test",
+					Commands: []string{
+						"nvidia-smi -L",
+					},
+					ResourceLimits: map[string]string{
+						"nvidia.com/gpu": "1",
+					},
+					ResourceRequests: map[string]string{
+						"nvidia.com/gpu": "1",
+					},
+				},
+			},
+		},
+	}
+
+	got, err := BuildWorkflowYAML(p, Options{
+		Kind: "workflowtemplate",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	out := string(got)
+	for _, want := range []string{
+		"image: nvidia/cuda:test",
+		"nvidia-smi -L",
+		"nvidia.com/gpu: \"1\"",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("rendered workflow missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "/kaniko/executor") {
+		t.Fatalf("host_driver should not invoke kaniko, got:\n%s", out)
+	}
+}
+
 func TestBuildWorkflowYAML_RendersInsecureRegistries(t *testing.T) {
 	p := &pipeline.Plan{
 		Name: "demo",

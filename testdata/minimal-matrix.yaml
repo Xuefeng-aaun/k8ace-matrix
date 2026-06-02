@@ -4,15 +4,30 @@ registry_prefix: "172.20.47.182:5000/k8ace"
 
 build_pipeline:
   stages:
+    - name: "host_driver"
+      description: "host driver"
+      parallel: true
+      matrix_dimension: "hardware"
     - name: "base_image"
       description: "base"
       parallel: true
       matrix_dimension: "base"
+      depends_on: ["host_driver"]
+    - name: "base_test"
+      description: "base smoke"
+      parallel: true
+      matrix_dimension: "base_test"
+      depends_on: ["base_image"]
     - name: "app_image"
       description: "app"
       parallel: true
       matrix_dimension: "app"
-      depends_on: ["base_image"]
+      depends_on: ["base_test"]
+    - name: "app_test"
+      description: "app smoke"
+      parallel: true
+      matrix_dimension: "app_test"
+      depends_on: ["app_image"]
   cache:
     type: "registry"
     ttl: "168h"
@@ -24,8 +39,10 @@ base_image_matrix:
     variants:
       - tag_suffix: "cuda12.4-devel-ubuntu22.04"
         cuda_version: "12.4"
+        cuda_short: "cuda-124"
         ubuntu_version: "22.04"
         python_version: "3.10"
+        min_driver_linux: "550.54.15"
         k8ace_compatible: ["nvidia"]
 
 application_matrix:
@@ -34,6 +51,7 @@ application_matrix:
       versions: ["2.5.1"]
       variants:
         - name: "pytorch-cuda"
+          accelerator: "cuda-124"
           base_ref: "cuda_base"
           hardware: ["nvidia"]
           additional_packages: ["torch==${version}", "torchvision", "torchaudio"]
