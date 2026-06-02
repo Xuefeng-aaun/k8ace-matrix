@@ -1,33 +1,139 @@
+# ==============================================================================
+# K8Ace Matrix 最小生产矩阵
+# ==============================================================================
+#
+# 这份文件是需要人工长期维护的“静态资产”，不是 Dockerfile 自动生成器。
+#
+# 当前职责：
+# 1. 记录仓库当前支持哪些 base image。
+# 2. 记录仓库当前支持哪些 app / version / variant。
+# 3. 记录 base 与 app 的依赖关系。
+# 4. 记录 Argo / Kaniko / MinIO / Registry 等产线运行参数。
+# 5. 给 batch plan 提供合法目标，供 matrix-ci 解析和渲染 Workflow。
+#
+# 当前不负责：
+# 1. 不负责创作 Dockerfile。
+# 2. 不负责描述复杂应用的完整安装逻辑。
+# 3. 不负责表达所有异构硬件的全量组合。
+#
+# 使用顺序建议：
+# 1. 先写好 Dockerfile。
+# 2. 再把 app / base 关系登记到本文件。
+# 3. 再写 batch-plan*.tsv 选择本轮要跑的目标。
+# 4. 最后用 matrix-ci batch 渲染并创建 Argo Workflow。
+# ==============================================================================
+
+# 矩阵配置版本。当前只是配置文件自身的 schema 版本，不等于项目发布版本。
 schema_version: "1.0"
+
+# 项目名称。主要用于说明和未来扩展，不直接决定镜像名。
 project: "k8ace-matrix"
+
+# 默认镜像推送前缀。
+# 当前指向服务器上的本地 Registry：
+# - 172.20.47.182:5000 是本地 Registry 地址
+# - /k8ace 是项目命名空间
+# 如果后续换成 Docker Hub 或其他私有仓库，优先改这里或在命令行用 --registry-prefix 覆盖。
 registry_prefix: "172.20.47.182:5000/k8ace"
 
+# ==============================================================================
+# 一、基础镜像矩阵
+# ==============================================================================
+#
+# base_image_matrix 用来登记“共享基础镜像”。
+#
+# 当前只保留 NVIDIA CUDA 12.4 这一条主线。app image 会基于这里产出的 base image
+# 继续构建，而不是每个 app 都从上游 nvidia/cuda 重新开始。
+# ==============================================================================
 base_image_matrix:
+  # cuda_base 是 base_ref 名称。
+  # application_matrix 里的 app variant 会通过 base_ref: "cuda_base" 指向这里。
   cuda_base:
+    # source 是当前 base 的上游来源。
+    # 这里没有直接写 nvidia/cuda，而是写本地 Registry 里的 upstream 镜像。
+    # 这样做的好处是：Kaniko 构建时优先从本地仓库拉取，减少 Docker Hub 网络波动。
     source: "172.20.47.182:5000/k8ace/upstream/nvidia-cuda"
+
+    # variants 表示同一种 base_ref 下的不同版本。
+    # 当前只有 cuda12.4-devel-ubuntu22.04。
     variants:
+      # tag_suffix 是本项目内部识别 base 版本的关键字段。
+      # 它会参与 base 镜像名、app 依赖选择和 batch 渲染。
       - tag_suffix: "cuda12.4-devel-ubuntu22.04"
+
+        # upstream_tag 是 source 对应的真实上游 tag。
+        # 当前等价于 nvidia/cuda:12.4.1-devel-ubuntu22.04 的版本语义。
         upstream_tag: "12.4.1-devel-ubuntu22.04"
+
+        # 以下字段主要用于人工理解和后续扩展。
+        # 当前 Dockerfile 内容才是真正的环境定义，矩阵字段只做登记和说明。
         cuda_version: "12.4"
         ubuntu_version: "22.04"
         python_version: "3.10"
+
+        # status 是人工维护状态。
+        # recommended 表示当前推荐使用；未来可以扩展 stable / legacy / experimental。
         status: "recommended"
+
+        # k8ace_compatible 表示这条 base 当前支持的硬件生态。
+        # 这里先只支持 nvidia。
         k8ace_compatible: ["nvidia"]
 
+# ==============================================================================
+# 二、应用矩阵
+# ==============================================================================
+#
+# application_matrix 用来登记“仓库当前承诺支持的应用目标”。
+#
+# 注意：
+# 1. 这里不描述完整安装逻辑。
+# 2. 这里不替代 Dockerfile。
+# 3. 这里只负责把 app / version / variant / base_ref / hardware 关系登记清楚。
+#
+# batch plan 中的 app_name、app_version、variant 必须能在这里找到唯一匹配项。
+# ==============================================================================
 application_matrix:
+  # practical_apps 是当前实战批次分组。
+  # 后续可以按用途扩展分组，比如 framework_apps / webui_apps / runtime_apps。
   practical_apps:
+    # --------------------------------------------------------------------------
+    # ComfyUI
+    # --------------------------------------------------------------------------
+    # 类型：service
+    # 定位：可直接 docker run 落地的 WebUI 服务镜像。
+    # Dockerfile 路径：
+    # dockerfiles/app_image/nvidia/comfyui/latest/comfyui-cuda/Dockerfile
     comfyui:
       versions: ["latest"]
       variants:
         - name: "comfyui-cuda"
           base_ref: "cuda_base"
           hardware: ["nvidia"]
+
+    # --------------------------------------------------------------------------
+    # LLaMA-Factory
+    # --------------------------------------------------------------------------
+    # 类型：cli，兼具 service 候选形态。
+    # 定位：训练/微调工具镜像。当前 L1 以 llamafactory-cli version/help 做轻量验收。
+    # 注意：默认 WebUI 直跑仍可能受到上游依赖版本组合影响。
+    # Dockerfile 路径：
+    # dockerfiles/app_image/nvidia/llama_factory/0.9.0/llamafactory-cuda/Dockerfile
     llama_factory:
       versions: ["0.9.0"]
       variants:
         - name: "llamafactory-cuda"
           base_ref: "cuda_base"
           hardware: ["nvidia"]
+
+    # --------------------------------------------------------------------------
+    # Stable Diffusion Runtime
+    # --------------------------------------------------------------------------
+    # 类型：runtime
+    # 定位：diffusers / StableDiffusion3Pipeline 运行时环境。
+    # 注意：它不是默认可直接启动网页的 service image。
+    # 如果后续要做服务镜像，需要先明确采用 FastAPI、Gradio、WebUI 还是 CLI 形态。
+    # Dockerfile 路径：
+    # dockerfiles/app_image/nvidia/stable_diffusion/3.5/sd-cuda/Dockerfile
     stable_diffusion:
       versions: ["3.5"]
       variants:
@@ -35,82 +141,200 @@ application_matrix:
           base_ref: "cuda_base"
           hardware: ["nvidia"]
 
+# ==============================================================================
+# 三、构建阶段定义
+# ==============================================================================
+#
+# build_pipeline.stages 定义 Argo Workflow 中可出现的阶段。
+#
+# 当前主链：
+# host_driver -> base_image -> app_image -> test -> push
+#
+# batch plan 可以选择只跑其中一部分，例如：
+# - base_image
+# - app_image,test,push
+# ==============================================================================
 build_pipeline:
   stages:
+    # host_driver 当前只是占位阶段。
+    # 真实驱动安装不由当前仓库负责，这里保留 stage 是为了保持完整流水线结构。
     - name: "host_driver"
       description: "noop host-driver placeholder"
       parallel: true
       matrix_dimension: "hardware"
+
+    # base_image 构建共享基础镜像。
+    # 当前目标是 cuda12.4-devel-ubuntu22.04。
     - name: "base_image"
       description: "build the shared cuda12.4 base image"
       parallel: true
       matrix_dimension: "base"
       depends_on: ["host_driver"]
+
+    # app_image 基于已经生产好的 base image 构建应用镜像。
     - name: "app_image"
       description: "build app images from the shared base"
       parallel: true
       matrix_dimension: "app"
       depends_on: ["base_image"]
+
+    # test 阶段会启动刚构建出的 app 镜像，并执行 hack/test/smoke.sh。
+    # 当前默认走 L1 轻量冒烟测试。
     - name: "test"
       description: "run app-specific L1 smoke checks"
       parallel: true
       matrix_dimension: "test"
       depends_on: ["app_image"]
+
+    # push 阶段用于保留完整发布链路。
+    # 当前实际镜像推送通常已经在 Kaniko build 阶段完成。
     - name: "push"
       description: "finalize image publication"
       parallel: false
       matrix_dimension: "registry"
       depends_on: ["test"]
+
+  # cache 是 Kaniko/Registry 缓存的预留配置。
+  # 当前 ci_cd.argo_workflows.cache.enabled 为 false，因此这块主要保留为未来扩展说明。
   cache:
     type: "registry"
     ttl: "168h"
     key_template: "k8ace/cache/{{ .Hardware.Vendor }}/{{ .Stage.Name }}/{{ .Checksum }}"
 
+# ==============================================================================
+# 四、构建参数覆盖
+# ==============================================================================
+#
+# build_args_overrides 用于给不同硬件生态注入构建参数。
+#
+# 当前只配置 nvidia，主要用途是让 Kaniko 构建时使用服务器上的 Clash 旁路由代理。
+# 如果后续服务器网络已经足够稳定，可以把代理字段删掉或改成空。
+# ==============================================================================
 build_args_overrides:
   nvidia:
+    # 大写代理变量，供大多数 apt / pip / git / curl 识别。
     HTTP_PROXY: "http://172.20.47.182:7890"
     HTTPS_PROXY: "http://172.20.47.182:7890"
+
+    # NO_PROXY 必须包含本地 Registry、Kubernetes Service 域名等内网目标。
+    # 否则 Pod 拉本地镜像时可能错误地走代理，导致 502 / EOF / ImagePullBackOff。
     NO_PROXY: "127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local"
+
+    # 小写代理变量，兼容部分工具链。
     http_proxy: "http://172.20.47.182:7890"
     https_proxy: "http://172.20.47.182:7890"
     no_proxy: "127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local"
 
+# ==============================================================================
+# 五、优先构建清单
+# ==============================================================================
+#
+# priority_build_list 当前主要作为人工查看的静态清单。
+#
+# 真实执行以 batch-plan*.tsv 为准。
+# ==============================================================================
 priority_build_list:
   practical:
     - "k8ace/comfyuilatest-nvidia-comfyui-cuda-latest"
     - "k8ace/llama_factory0.9.0-nvidia-llamafactory-cuda-latest"
     - "k8ace/stable_diffusion3.5-nvidia-sd-cuda-latest"
 
+# ==============================================================================
+# 六、命名规则
+# ==============================================================================
+#
+# naming_convention 是未来扩展用的命名说明。
+#
+# 当前真实镜像名主要由 pipeline/unit 里的逻辑生成，不完全由这里直接驱动。
+# 因此这里先保留为“命名意图说明”，后续如果要统一命名可以再重构。
+# ==============================================================================
 naming_convention:
   template: "{{ .RegistryPrefix }}/{{ .AppName }}-{{ .Hardware.Vendor }}-{{ .VersionSuffix }}"
 
+# ==============================================================================
+# 七、CI/CD 与 Argo/Kaniko 配置
+# ==============================================================================
+#
+# ci_cd.argo_workflows 是当前产线真正重要的运行参数区。
+#
+# 它决定：
+# 1. Workflow 创建在哪个 namespace。
+# 2. 使用哪个 service account。
+# 3. Kaniko 使用哪个 executor image。
+# 4. Kaniko 从哪里下载 context.tar.gz。
+# 5. 使用哪些 Secret。
+# 6. 本地 Registry 是否按 insecure registry 处理。
+# ==============================================================================
 ci_cd:
   argo_workflows:
+    # Kubernetes namespace。
     namespace: "default"
+
+    # Argo Workflow 运行时使用的 service account。
     service_account: "argo-workflow"
+
+    # 默认渲染 WorkflowTemplate。
+    # batch --create 会先 apply WorkflowTemplate，再创建引用它的 Workflow。
     kind_default: "workflowtemplate"
+
+    # 保留字段。当前日常使用更多走 kubectl create。
     submit_mode_default: "argo-server"
     argo_server: ""
+
+    # Kaniko executor 镜像版本。
+    # 如果未来拉取 gcr.io 不稳定，可以考虑提前同步到本地 Registry。
     kaniko_image: "gcr.io/kaniko-project/executor:v1.23.2"
+
+    # Workflow 内部并发度。
+    # 当前设置为 2，避免同时启动过多 Kaniko Pod 给控制面和网络造成压力。
     parallelism: 2
+
+    # Kaniko 构建上下文配置。
+    # matrix-ci batch --create 会先执行 hack/package_context.sh，再上传到这里。
     build_context:
+      # Kaniko 实际读取的 context 地址。
       default: "s3://kaniko-contexts/k8ace/context.tar.gz"
+
+      # 注入到 Kaniko Pod 里的环境变量。
       env:
         AWS_REGION: "us-east-1"
+
+        # MinIO 服务地址。
         S3_ENDPOINT: "http://172.20.47.182:9000"
+
+        # MinIO 通常需要 path-style 访问。
         S3_FORCE_PATH_STYLE: "true"
+
+        # 构建阶段访问外网时使用的代理。
         HTTP_PROXY: "http://172.20.47.182:7890"
         HTTPS_PROXY: "http://172.20.47.182:7890"
+
+        # 内网目标不要走代理。
         NO_PROXY: "127.0.0.1,localhost,172.20.47.182,.svc,.cluster.local"
+
+        # 某些 S3/代理组合下禁用 HTTP/2 更稳定。
         GODEBUG: "http2client=0"
+
+      # Kubernetes Secret 名称。
       secret_name: "kaniko-context-credentials"
+
+      # Secret 中 key 到环境变量的映射。
       secret_env:
         AWS_ACCESS_KEY_ID: "accessKey"
         AWS_SECRET_ACCESS_KEY: "secretKey"
+
+    # 本地 Registry 是 HTTP/insecure registry。
+    # Kaniko 推送和 Kubernetes 拉取都需要配套支持。
     insecure_registries:
       - "172.20.47.182:5000"
+
+    # 跳过推送权限预检查，减少本地 Registry 场景下的额外失败点。
     skip_push_permission_check: true
+
+    # Docker Registry 凭据 Secret。
     registry_secret_name: "registry-credentials"
+
+    # 当前关闭 Kaniko 远程缓存。
     cache:
       enabled: false
       repo_template: "{{ .RegistryPrefix }}/cache/{{ .Hardware }}/{{ .Stage }}"
