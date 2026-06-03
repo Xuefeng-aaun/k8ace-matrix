@@ -9,6 +9,15 @@ import (
 	"k8ace-matrix/internal/matrix"
 )
 
+const (
+	hostDriverStage = "host_driver"
+
+	// Demo 阶段先验证 Dockerfile -> Kaniko -> Registry 主链路。
+	// host_driver 和 L2 CUDA runtime 都依赖节点 NVIDIA runtime/device-plugin，
+	// 对首版演示过重，后续硬件验收稳定后再恢复。
+	demoHardwareValidationEnabled = false
+)
+
 type Selection struct {
 	Hardwares    []string
 	Apps         []string
@@ -250,42 +259,22 @@ func resolveStages(m *matrix.Matrix, requested []string) ([]matrix.Stage, error)
 	wantAll := len(requested) == 0 || contains(requested, "all")
 	required := map[string]bool{}
 
-	var collectDeps func(string, map[string]bool) error
-	collectDeps = func(stageName string, visiting map[string]bool) error {
-		if required[stageName] {
-			return nil
-		}
-		st, ok := stageDefs[stageName]
-		if !ok {
-			return fmt.Errorf("stage not found: %s", stageName)
-		}
-		if visiting[stageName] {
-			return fmt.Errorf("cyclic stage dependency detected at %s", stageName)
-		}
-
-		visiting[stageName] = true
-		for _, depName := range st.DependsOn {
-			if err := collectDeps(depName, visiting); err != nil {
-				return err
-			}
-		}
-		delete(visiting, stageName)
-		required[stageName] = true
-		return nil
-	}
-
 	if wantAll {
 		for _, st := range m.BuildPipeline.Stages {
-			required[st.Name] = true
+			if !isTemporarilyDisabledStage(st.Name) {
+				required[st.Name] = true
+			}
 		}
 	} else {
 		for _, s := range requested {
-			stageName := normalizeStageRequest(s)
-			if stageName == "" {
-				continue
-			}
-			if err := collectDeps(stageName, map[string]bool{}); err != nil {
-				return nil, err
+			for _, stageName := range expandStageRequest(s) {
+				if stageName == "" || isTemporarilyDisabledStage(stageName) {
+					continue
+				}
+				if _, ok := stageDefs[stageName]; !ok {
+					return nil, fmt.Errorf("stage not found: %s", stageName)
+				}
+				required[stageName] = true
 			}
 		}
 	}
@@ -293,6 +282,7 @@ func resolveStages(m *matrix.Matrix, requested []string) ([]matrix.Stage, error)
 	var stages []matrix.Stage
 	for _, st := range m.BuildPipeline.Stages {
 		if required[st.Name] {
+			st.DependsOn = activeStageDeps(st.DependsOn, required)
 			stages = append(stages, st)
 		}
 	}
@@ -302,6 +292,36 @@ func resolveStages(m *matrix.Matrix, requested []string) ([]matrix.Stage, error)
 	}
 
 	return stages, nil
+}
+
+func expandStageRequest(stageName string) []string {
+	stageName = strings.TrimSpace(stageName)
+	switch strings.ToLower(stageName) {
+	case "base":
+		return []string{"base_image", "base_test"}
+	case "app":
+		return []string{"app_image", "app_test"}
+	case "test":
+		return []string{"app_test"}
+	default:
+		return []string{stageName}
+	}
+}
+
+func isTemporarilyDisabledStage(stageName string) bool {
+	return !demoHardwareValidationEnabled && strings.EqualFold(strings.TrimSpace(stageName), hostDriverStage)
+}
+
+func activeStageDeps(deps []string, required map[string]bool) []string {
+	var out []string
+	for _, dep := range deps {
+		dep = strings.TrimSpace(dep)
+		if dep == "" || isTemporarilyDisabledStage(dep) || !required[dep] {
+			continue
+		}
+		out = append(out, dep)
+	}
+	return out
 }
 
 func normalizeStageRequest(stageName string) string {
@@ -333,7 +353,11 @@ func resolveDockerfileOverride(requested []string, dockerfile string) (string, s
 		if strings.EqualFold(stageName, "all") {
 			return "", "", fmt.Errorf("--dockerfile requires exactly one explicit --stage")
 		}
-		explicit = append(explicit, stageName)
+		expanded := expandStageRequest(stageName)
+		if len(expanded) != 1 {
+			return "", "", fmt.Errorf("--dockerfile requires exactly one explicit --stage")
+		}
+		explicit = append(explicit, expanded[0])
 	}
 	if len(explicit) != 1 {
 		return "", "", fmt.Errorf("--dockerfile requires exactly one explicit --stage")
@@ -398,9 +422,13 @@ func buildStageTask(
 		}
 		task.Kaniko.BuildArgs["BASE_IMAGE"] = u.BaseImageDest
 	case "app_test":
+		smokeLevel := "L2"
+		if !demoHardwareValidationEnabled {
+			smokeLevel = "L1"
+		}
 		task.TestImage = u.AppImageDest
 		task.TestCommands = []string{
-			fmt.Sprintf("if [ -f /opt/k8ace/hack/test/smoke.sh ]; then bash /opt/k8ace/hack/test/smoke.sh L2 %s %s; else python3 --version && (pip list --format=columns 2>/dev/null || pip3 list --format=columns 2>/dev/null || true); fi", u.AppName, u.Hardware),
+			fmt.Sprintf("if [ -f /opt/k8ace/hack/test/smoke.sh ]; then bash /opt/k8ace/hack/test/smoke.sh %s %s %s; else python3 --version && (pip list --format=columns 2>/dev/null || pip3 list --format=columns 2>/dev/null || true); fi", smokeLevel, u.AppName, u.Hardware),
 		}
 		applyTestResources(&task, u)
 		task.Kaniko.Image = u.AppImageDest
@@ -437,6 +465,9 @@ func taskNameForStage(stageName string, u BuildUnit) string {
 }
 
 func applyTestResources(task *Task, u BuildUnit) {
+	if !demoHardwareValidationEnabled {
+		return
+	}
 	if strings.EqualFold(strings.TrimSpace(u.Hardware), "nvidia") {
 		task.TestResourceLimits = map[string]string{"nvidia.com/gpu": "1"}
 		task.TestResourceRequests = map[string]string{"nvidia.com/gpu": "1"}
@@ -444,6 +475,15 @@ func applyTestResources(task *Task, u BuildUnit) {
 }
 
 func baseRuntimeSmokeCommand(u BuildUnit) string {
+	if !demoHardwareValidationEnabled {
+		return `set -eu
+echo "[base_test] demo smoke: python/pip only"
+python3 --version
+(pip --version || pip3 --version)
+echo "[base_test] PASS: base image has basic Python runtime"
+`
+	}
+
 	if !strings.EqualFold(strings.TrimSpace(u.Hardware), "nvidia") {
 		return fmt.Sprintf("echo '[base_test] unsupported hardware=%s'; exit 1", shellQuote(u.Hardware))
 	}

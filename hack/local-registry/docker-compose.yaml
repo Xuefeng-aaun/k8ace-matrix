@@ -4,8 +4,27 @@ services:
     restart: unless-stopped
     ports:
       - "5000:5000"
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
     volumes:
       - registry-data:/var/lib/registry
+
+  registry-ui:
+    image: joxit/docker-registry-ui:2
+    restart: unless-stopped
+    ports:
+      - "8088:80"
+    environment:
+      SINGLE_REGISTRY: "true"
+      REGISTRY_TITLE: "K8Ace Local Registry"
+      DELETE_IMAGES: "true"
+      SHOW_CONTENT_DIGEST: "true"
+      NGINX_PROXY_PASS_URL: "http://registry:5000"
+      CATALOG_MIN_BRANCHES: "1"
+      CATALOG_MAX_BRANCHES: "2"
+      TAGLIST_PAGE_SIZE: "100"
+    depends_on:
+      - registry
 
 volumes:
   registry-data:

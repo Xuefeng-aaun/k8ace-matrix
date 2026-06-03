@@ -7,7 +7,7 @@ import (
 	"k8ace-matrix/internal/matrix"
 )
 
-func TestBuildPlansResolvesStageDependencies(t *testing.T) {
+func TestBuildPlansAppAliasDoesNotImplicitlyBuildBase(t *testing.T) {
 	m := testMatrix()
 
 	plans, err := BuildPlans(m, Selection{
@@ -35,7 +35,7 @@ func TestBuildPlansResolvesStageDependencies(t *testing.T) {
 		taskByStage[task.Stage] = task
 	}
 
-	wantStages := []string{"host_driver", "base_image", "base_test", "app_image", "app_test"}
+	wantStages := []string{"app_image", "app_test"}
 	if len(gotStages) != len(wantStages) {
 		t.Fatalf("resolved stages = %v, want %v", gotStages, wantStages)
 	}
@@ -45,31 +45,20 @@ func TestBuildPlansResolvesStageDependencies(t *testing.T) {
 		}
 	}
 
-	if len(taskByStage["host_driver"].DependsOn) != 0 {
-		t.Fatalf("host_driver depends_on = %v, want none", taskByStage["host_driver"].DependsOn)
+	if _, ok := taskByStage["host_driver"]; ok {
+		t.Fatalf("host_driver should be disabled during demo validation")
 	}
-	if deps := taskByStage["base_image"].DependsOn; len(deps) != 1 || deps[0] != taskByStage["host_driver"].Name {
-		t.Fatalf("base_image depends_on = %v, want [%s]", deps, taskByStage["host_driver"].Name)
+	if _, ok := taskByStage["base_image"]; ok {
+		t.Fatalf("app alias should not include base_image")
 	}
-	if deps := taskByStage["base_test"].DependsOn; len(deps) != 1 || deps[0] != taskByStage["base_image"].Name {
-		t.Fatalf("base_test depends_on = %v, want [%s]", deps, taskByStage["base_image"].Name)
+	if _, ok := taskByStage["base_test"]; ok {
+		t.Fatalf("app alias should not include base_test")
 	}
-	if deps := taskByStage["app_image"].DependsOn; len(deps) != 1 || deps[0] != taskByStage["base_test"].Name {
-		t.Fatalf("app_image depends_on = %v, want [%s]", deps, taskByStage["base_test"].Name)
+	if deps := taskByStage["app_image"].DependsOn; len(deps) != 0 {
+		t.Fatalf("app_image depends_on = %v, want none because base is explicit in batch plan", deps)
 	}
 	if deps := taskByStage["app_test"].DependsOn; len(deps) != 1 || deps[0] != taskByStage["app_image"].Name {
 		t.Fatalf("app_test depends_on = %v, want [%s]", deps, taskByStage["app_image"].Name)
-	}
-
-	hostDriver := taskByStage["host_driver"].HostDriver
-	if len(hostDriver.Commands) == 0 {
-		t.Fatalf("host_driver commands are empty")
-	}
-	if !strings.Contains(hostDriver.Commands[0], "nvidia-smi") {
-		t.Fatalf("host_driver should check nvidia-smi, got %q", hostDriver.Commands[0])
-	}
-	if got := hostDriver.ResourceLimits["nvidia.com/gpu"]; got != "1" {
-		t.Fatalf("host_driver gpu limit = %q, want 1", got)
 	}
 }
 
@@ -105,12 +94,15 @@ func TestBuildPlansAppTestStageRunsSmokeHelperWhenAvailable(t *testing.T) {
 	if !strings.Contains(testTask.TestCommands[0], "/opt/k8ace/hack/test/smoke.sh") {
 		t.Fatalf("app_test command should call smoke helper, got %q", testTask.TestCommands[0])
 	}
-	if !strings.Contains(testTask.TestCommands[0], "L2 demo nvidia") {
+	if !strings.Contains(testTask.TestCommands[0], "L1 demo nvidia") {
 		t.Fatalf("app_test command should pass app+hardware to smoke helper, got %q", testTask.TestCommands[0])
+	}
+	if len(testTask.TestResourceLimits) != 0 || len(testTask.TestResourceRequests) != 0 {
+		t.Fatalf("app_test should not request GPU resources in demo mode")
 	}
 }
 
-func TestBuildPlansBaseAliasExpandsToHostDriverBaseAndBaseTest(t *testing.T) {
+func TestBuildPlansBaseAliasExpandsToBaseAndBaseTest(t *testing.T) {
 	m := testMatrix()
 
 	plans, err := BuildPlans(m, Selection{
@@ -131,7 +123,7 @@ func TestBuildPlansBaseAliasExpandsToHostDriverBaseAndBaseTest(t *testing.T) {
 	for _, task := range plans[0].Tasks {
 		gotStages = append(gotStages, task.Stage)
 	}
-	wantStages := []string{"host_driver", "base_image", "base_test"}
+	wantStages := []string{"base_image", "base_test"}
 	if len(gotStages) != len(wantStages) {
 		t.Fatalf("resolved stages = %v, want %v", gotStages, wantStages)
 	}
@@ -139,6 +131,17 @@ func TestBuildPlansBaseAliasExpandsToHostDriverBaseAndBaseTest(t *testing.T) {
 		if gotStages[i] != wantStages[i] {
 			t.Fatalf("resolved stages = %v, want %v", gotStages, wantStages)
 		}
+	}
+
+	taskByStage := map[string]Task{}
+	for _, task := range plans[0].Tasks {
+		taskByStage[task.Stage] = task
+	}
+	if deps := taskByStage["base_image"].DependsOn; len(deps) != 0 {
+		t.Fatalf("base_image depends_on = %v, want none while host_driver is disabled", deps)
+	}
+	if deps := taskByStage["base_test"].DependsOn; len(deps) != 1 || deps[0] != taskByStage["base_image"].Name {
+		t.Fatalf("base_test depends_on = %v, want [%s]", deps, taskByStage["base_image"].Name)
 	}
 }
 
@@ -168,8 +171,8 @@ func TestBuildPlansDockerfileOverrideAppliesToSingleExplicitStage(t *testing.T) 
 	if got := taskByStage["app_image"].Kaniko.Dockerfile; got != "custom/Dockerfile" {
 		t.Fatalf("app_image dockerfile = %q, want custom/Dockerfile", got)
 	}
-	if got := taskByStage["base_image"].Kaniko.Dockerfile; got == "custom/Dockerfile" {
-		t.Fatalf("base_image dockerfile unexpectedly overridden: %q", got)
+	if _, ok := taskByStage["base_image"]; ok {
+		t.Fatalf("explicit app_image stage should not implicitly include base_image")
 	}
 }
 

@@ -1,4 +1,9 @@
 # hardware app_name app_version variant stages
+# 先显式生产一次共享 base。
+# 当前 base 仍通过 app variant 的 base_ref 反查，这是暂时保守的设计债务。
+nvidia comfyui 0.22.0 comfyui-service-cuda124 base
+
+# 再生产三个 app。app 阶段不再自动重复生产 base。
 nvidia comfyui 0.22.0 comfyui-service-cuda124 app
 nvidia llama_factory 0.9.0 llama-factory-cli-cuda124 app
 nvidia stable_diffusion 3.5 stable-diffusion-runtime-cuda124 app

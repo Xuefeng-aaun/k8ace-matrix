@@ -1,46 +1,25 @@
 # batch plan 模板
 #
-# 执行者只需要声明“我要生产 base”或者“我要生产 app”。
-# 生产 app 的标准写法是一行：
-#
+# 一行格式：
 # hardware app_name app_version variant stages
-# nvidia comfyui 0.22.0 comfyui-service-cuda124 app
 #
-# 注意：虽然这一行只写了 app，
-# 但程序会根据 images-matrix.yaml 里的 stage 依赖自动展开为：
+# 当前推荐只使用两类 stages：
+# - base：只生产并测试 base image，展开为 base_image -> base_test
+# - app：只生产并测试 app image，展开为 app_image -> app_test
 #
-# host_driver -> base_image -> base_test -> app_image -> app_test
+# 重要原则：
+# app 不再自动携带 base。
+# 如果本轮 app 依赖的 base 还没有生产过，需要在 app 行前面显式写一行 base。
 #
-# 也就是说：
-# - host_driver 不需要手写，它会自动排在 base 和 app 前面。
-# - base_image 不会被忘掉，它会自动通过 app variant 反查 base_ref 后生产。
-# - base_test 也会自动执行，用刚构建出的 base image 做 CUDA runtime 冒烟测试。
-# - app_test 会启动刚构建出的 app image 做应用级和 CUDA runtime 冒烟测试。
-# - push 阶段已经删除，因为 Kaniko 在 app_image 构建完成时已经把镜像推送到目标 Registry。
+# 为什么 base 行仍然需要 app_name/app_version/variant？
+# 这是当前项目的保守设计债务：
+# matrix-ci 仍通过 app -> variant -> base_ref 找到精确 base。
+# 后续可以升级为独立 base plan 语法，例如直接写 base_ref。
 #
-# 为什么 base 仍然需要 app_name/app_version/variant？
-#
-# 这是当前项目的设计债务。
-#
-# 现在的 matrix-ci 仍然通过“app -> variant -> base_ref”来找到精确 base，
-# 而不是直接提供一个完全独立的 base_ref plan 语法。
-#
-# 这样做是为了避免组合爆炸：
-# 如果先全量生产所有 base，再全量生产所有 app，很快会产生大量无意义组合。
-# 当前更保守的原则是：
-#
-# “需要什么 app，就只生产它明确依赖的那个 base。”
-#
-# 如果你只想单独生产并测试 base，可以写：
-#
-# nvidia comfyui 0.22.0 comfyui-service-cuda124 base
-#
-# 这一行会自动展开为：
-#
-# host_driver -> base_image -> base_test
-#
-# 如果你要生产多个 app，可以写多行：
-#
-# nvidia comfyui 0.22.0 comfyui-service-cuda124 app
-# nvidia llama_factory 0.9.0 llama-factory-cli-cuda124 app
-# nvidia stable_diffusion 3.5 stable-diffusion-runtime-cuda124 app
+# 示例：先生产共享 base，再生产三个 app。
+
+# hardware app_name app_version variant stages
+nvidia comfyui 0.22.0 comfyui-service-cuda124 base
+nvidia comfyui 0.22.0 comfyui-service-cuda124 app
+nvidia llama_factory 0.9.0 llama-factory-cli-cuda124 app
+nvidia stable_diffusion 3.5 stable-diffusion-runtime-cuda124 app

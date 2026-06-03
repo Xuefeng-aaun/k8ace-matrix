@@ -1,601 +1,653 @@
-# k8ace-matrix
+# K8Ace Matrix
 
-`k8ace-matrix` 是一套面向 CUDA 场景的半自动镜像生产仓库。
+K8Ace Matrix 是一套面向算力平台的镜像生产产线。当前版本已经收敛为一个更务实的半自动系统：Dockerfile 由人工或 AI 编写并维护，`images-matrix.yaml` 负责登记可生产目标，`batch-plan*.tsv` 负责声明本轮要生产什么，`matrix-ci` 负责把计划渲染成 Argo Workflow，最后由 Argo 调度 Kaniko 构建镜像并推送到服务器本地 Registry。
 
-它现在的定位很明确：
-
-- Dockerfile 由人工或 AI 参考上游资料编写
-- `images-matrix.yaml` 负责登记支持范围和运行参数
-- `batch plan` 负责选择“这次要生产什么”
-- `matrix-ci + Argo + Kaniko + MinIO + 本地 Registry` 负责批量构建、测试和产物落库
-
-它不再追求“从矩阵自动生成所有 Dockerfile”。
-
-## 当前支持
-
-- 硬件：`nvidia`
-- 共享基础镜像：`cuda12.4-devel-ubuntu22.04`
-- 当前实战应用：
-  - `comfyui`
-  - `llama_factory`
-  - `stable_diffusion`
-
-## 仓库怎么理解
-
-这套仓库可以看成 4 层：
-
-1. Dockerfile 配方层  
-   决定镜像里真正装什么、默认怎么启动。
-
-2. 编排配置层  
-   由 `images-matrix.yaml` 承担，负责声明当前仓库支持哪些 base、哪些 app、有哪些 stage。
-
-3. 批次计划层  
-   由 `batch-plan.*.tsv` 承担，负责决定“这次跑哪几个目标”。
-
-4. 执行层  
-   由 `matrix-ci`、Argo、Kaniko、MinIO、本地 Registry 组成，负责把镜像真正做出来。
-
-## 当前主链
-
-当前主链固定为：
+一句话理解：
 
 ```text
-写 Dockerfile
--> 写/维护 matrix 记录
--> 写 plan
--> 打包 context
--> 上传 MinIO
--> 渲染 Argo Workflow
--> host_driver 检查 NVIDIA GPU/驱动/CUDA 兼容性
--> Argo 调度 Kaniko
--> 构建 base_image / app_image
--> 执行 smoke 测试
--> 推送到本地 Registry
+Dockerfile + images-matrix.yaml + batch-plan.tsv
+        -> matrix-ci
+        -> Argo Workflow
+        -> Kaniko 构建
+        -> 本地 Registry 保存镜像产物
 ```
+
+当前可运行版本聚焦 NVIDIA CUDA 生态，已经验证过 `cuda12.4-devel-ubuntu22.04` base image 以及三个 app image：
+
+- `comfyui 0.22.0`
+- `llama_factory 0.9.0`
+- `stable_diffusion 3.5`
+
+## 当前定位
+
+这个项目现在不是“全自动 Dockerfile 生成器”，也不是“一次性展开所有矩阵组合”的魔法工具。
+
+当前职责：
+
+- 维护一组经过人工确认的 Dockerfile。
+- 维护一份可读、可审查的生产矩阵 `images-matrix.yaml`。
+- 用 TSV batch plan 声明本轮生产目标。
+- 自动完成 context 打包、MinIO 上传、Argo 任务创建、Kaniko 构建和本地 Registry 入库。
+- 提供轻量冒烟测试，证明镜像至少具备基础可用性。
+
+当前不负责：
+
+- 不自动从矩阵创作复杂应用 Dockerfile。
+- 不保证所有应用都能用同一套模板生成。
+- 不做全量异构硬件生产。
+- 不默认把产物推送到 Docker Hub。
 
 ## 目录结构
 
 ```text
-images-matrix.yaml
-batch-plan.nvidia-cuda.base12.4.tsv
-batch-plan.nvidia-cuda.practical-3apps.tsv
-Makefile
-
-cmd/matrix-ci/
-internal/matrix/
-internal/pipeline/
-internal/argo/
-internal/version/
-
-dockerfiles/
-  base_image/nvidia/cuda124_base/cuda12.4-devel-ubuntu22.04/
-  app_image/nvidia/comfyui/0.22.0/comfyui-service-cuda124/
-  app_image/nvidia/llama_factory/0.9.0/llama-factory-cli-cuda124/
-  app_image/nvidia/stable_diffusion/3.5/stable-diffusion-runtime-cuda124/
-
-hack/
-  package_context.sh
-  test/smoke.sh
-  images/comfyui/entrypoint.sh
-  images/llama-factory/entrypoint.sh
-  local-registry/
-
-docs/
-  practical-app-dockerfile-sources.md
-  application-taxonomy.md
+.
+├── Makefile
+├── README.md
+├── images-matrix.yaml
+├── batch-plan.template.tsv
+├── batch-plan.nvidia-cuda.base12.4.tsv
+├── batch-plan.nvidia-cuda.practical-3apps.tsv
+├── cmd/matrix-ci/
+├── internal/
+│   ├── matrix/
+│   ├── pipeline/
+│   └── argo/
+├── dockerfiles/
+│   ├── base_image/nvidia/cuda124_base/cuda12.4-devel-ubuntu22.04/Dockerfile
+│   └── app_image/nvidia/
+│       ├── comfyui/0.22.0/comfyui-service-cuda124/Dockerfile
+│       ├── llama_factory/0.9.0/llama-factory-cli-cuda124/Dockerfile
+│       └── stable_diffusion/3.5/stable-diffusion-runtime-cuda124/Dockerfile
+├── hack/
+│   ├── package_context.sh
+│   ├── test/smoke.sh
+│   └── local-registry/
+├── docs/
+└── testdata/
 ```
 
-## 第一次拿到项目怎么做
+主要模块：
 
-### 1. 先确认环境
+- `cmd/matrix-ci`: CLI 入口，提供 `batch`、`render`、`scaffold` 等命令。
+- `internal/matrix`: 读取并解析 `images-matrix.yaml`。
+- `internal/pipeline`: 根据矩阵和 batch plan 推导构建任务。
+- `internal/argo/render`: 把任务渲染成 Argo WorkflowTemplate / Workflow YAML。
+- `dockerfiles/base_image`: 共享基础镜像 Dockerfile。
+- `dockerfiles/app_image`: 应用镜像 Dockerfile。
+- `hack/package_context.sh`: 把仓库打包成 Kaniko 可读取的 `context.tar.gz`。
+- `hack/test/smoke.sh`: app image 冒烟测试入口。
+- `hack/local-registry`: 本地 Registry 和轻量 Web UI。
 
-至少需要：
+## 运行前准备
 
-- Go
-- GNU Make
-- Docker
-- kubectl
-- Argo Workflows
-- `mc`（MinIO Client）
+服务器需要具备：
 
-如果要做 CUDA 实战，还需要：
+```bash
+go version
+make --version
+docker version
+kubectl version --client
+mc --version
+```
 
-- 宿主机 `nvidia-smi` 正常
-- Docker 支持 `--gpus all`
+还需要以下基础服务已经可用：
 
-### 2. 写本次要生产什么
+- Kubernetes + Argo Workflows
+- MinIO，作为 Kaniko 构建上下文存储
+- 本地 Docker Registry，作为最终镜像产物仓库
+- 服务器网络代理或国内镜像链路，用于拉取上游镜像和 pip/apt 依赖
 
-执行者主要维护 `batch plan`。
-
-当前三应用 demo 已经写好：
+当前服务器默认路径：
 
 ```text
-batch-plan.nvidia-cuda.practical-3apps.tsv
+/home/xuefeng/newimage/images
 ```
 
-如果要生产别的应用，可以从模板复制一份：
+## 核心配置
 
-```bash
-cp batch-plan.template.tsv batch-plan.my-apps.tsv
+### images-matrix.yaml
+
+`images-matrix.yaml` 是人工维护的生产资产。它负责登记：
+
+- 当前支持哪些 base image。
+- 当前支持哪些 app image。
+- app 依赖哪个精确的 `base_ref`。
+- Argo / Kaniko / MinIO / Registry 等产线参数。
+
+当前本地 Registry 前缀：
+
+```yaml
+registry_prefix: "172.20.47.182:5000/k8ace"
 ```
 
-然后只改里面的目标行。
+当前 CUDA 12.4 base 使用 DaoCloud public-image-mirror 作为上游来源：
 
-### 3. 先预演
-
-```bash
-cd /home/xuefeng/newimage/images
-make preview PLAN=你的plan.tsv
+```yaml
+base_image_matrix:
+  cuda124_base:
+    source: "m.daocloud.io/docker.io/nvidia/cuda"
+    variants:
+      - tag_suffix: "cuda12.4-devel-ubuntu22.04"
+        upstream_tag: "12.4.1-devel-ubuntu22.04"
 ```
 
-预演只会打印将执行的 `kubectl apply/create`，不会真的提交 Workflow。输出目录会自动变成 `dist/<plan文件名去掉.tsv>`。
-
-### 4. 正式生产
-
-```bash
-make produce PLAN=你的plan.tsv
-```
-
-这条命令会自动完成：
+这表示 base Dockerfile 的父镜像会被渲染为：
 
 ```text
-编译 matrix-ci
--> 运行 Go 测试
--> 打包 context.tar.gz
--> 上传 context 到 MinIO
--> 渲染 Argo WorkflowTemplate
--> 创建 Argo Workflow
+m.daocloud.io/docker.io/nvidia/cuda:12.4.1-devel-ubuntu22.04
 ```
 
-### 5. 当前三应用 demo
+app 与 base 的关系在 `application_matrix` 中登记。例如：
 
-如果只是跑当前仓库自带的三个 demo app：
-
-```bash
-make demo-preview
-make demo
+```yaml
+comfyui:
+  type: "service"
+  versions:
+    "0.22.0":
+      runtimes:
+        cuda:
+          cuda-124:
+            name: "comfyui-service-cuda124"
+            base_ref: "cuda124_base"
+            hardware: ["nvidia"]
 ```
 
-## batch plan 怎么写
+这说明 `comfyui 0.22.0 / comfyui-service-cuda124` 依赖 `cuda124_base`。
 
-当前 `plan` 一行格式是：
+### batch plan
+
+`batch-plan*.tsv` 是使用者最常改的文件。它只回答一个问题：本轮要生产什么。
+
+格式：
 
 ```text
 hardware app_name app_version variant stages
 ```
 
-注意：
+字段含义：
 
-- 这不是严格 TSV
-- 代码里用的是空白分列，所以空格和 Tab 都能识别
-- 最稳妥的写法就是“每列之间一个空格”
+- `hardware`: 硬件生态，当前 demo 使用 `nvidia`。
+- `app_name`: 应用名，必须能在 `images-matrix.yaml` 中找到。
+- `app_version`: 应用版本，不建议使用 `latest`。
+- `variant`: 应用变体，必须和矩阵中的 `name` 完全一致。
+- `stages`: 本轮生产意图，当前推荐 `base` 或 `app`。
 
-### 字段含义
+示例：
 
-1. `hardware`  
-   比如：`nvidia`
-
-2. `app_name`  
-   必须和 `images-matrix.yaml` 里的应用名完全一致
-
-3. `app_version`  
-   必须和矩阵里的版本完全一致
-
-4. `variant`  
-   必须和矩阵里的 `variants.name` 完全一致
-
-5. `stages`  
-   可选。推荐只写用户意图：
-   - `base`：生产并测试 base image
-   - `app`：生产并测试 app image
-
-如果不写第 5 列，默认就是 `all`。
-
-### 推荐写法：只写 base 或 app，依赖自动展开
-
-生产 app image 的标准写法是一行：
-
-```text
-# hardware app_name app_version variant stages
-nvidia comfyui 0.22.0 comfyui-service-cuda124 app
-```
-
-虽然这一行只写了 `app`，但程序会根据 `images-matrix.yaml` 里的 stage 依赖自动展开为：
-
-```text
-host_driver -> base_image -> base_test -> app_image -> app_test
-```
-
-也就是说，`host_driver` 会自动排在 base 和 app 前面；`base_image` 不会被忘掉；`base_test` 也会在 base 构建后执行；`app_test` 会在 app 构建后执行。
-
-`push` 阶段已经删除，因为 Kaniko 在 `base_image` / `app_image` 构建完成时已经通过 `--destination` 把镜像推送到目标 Registry。额外保留一个 `push` 阶段只会增加误解。
-
-如果只想单独生产并测试 base，可以写：
-
-```text
+```tsv
 # hardware app_name app_version variant stages
 nvidia comfyui 0.22.0 comfyui-service-cuda124 base
-```
-
-这一行会自动展开为：
-
-```text
-host_driver -> base_image -> base_test
-```
-
-这里仍然要写 `app_name/app_version/variant`，这是当前项目的设计债务：`base_image` 计划仍然借助 app 记录来定位精确 `base_ref`，而不是独立写 `base_ref`。这样做是为了避免组合爆炸。当前原则是：
-
-```text
-需要什么 app，就只生产它明确依赖的那个 base。
-```
-
-## application matrix 怎么维护
-
-`application_matrix` 现在按“应用 -> 类型 -> 版本 -> 运行时 -> 驱动版本”的思路维护。
-
-核心规则：
-
-- 应用名只负责标识应用本体，例如 `comfyui`、`llama_factory`。
-- `type` 提前写在应用顶层，例如 `service`、`cli`、`runtime`，后续 smoke 测试会按类型选择验收方式。
-- 版本必须写具体版本号，不建议再写 `latest`，否则后续无法判断镜像到底对应哪一次上游状态。
-- `runtime` 当前主要是 `cuda`，未来可以扩展 `cpu`、`cann` 等。
-- 驱动版本必须写细，例如 `cuda-124`，不要只写 `cuda`。
-- `base_ref` 必须指向精确 base，例如 `cuda124_base`，避免通过 app 名称或粗粒度 `cuda_base` 反推。
-
-当前示例结构：
-
-```yaml
-application_matrix:
-  practical_apps:
-    comfyui:
-      type: "service"
-      versions:
-        "0.22.0":
-          runtimes:
-            cuda:
-              cuda-124:
-                name: "comfyui-service-cuda124"
-                base_ref: "cuda124_base"
-                hardware: ["nvidia"]
-```
-
-### 示例 1：只生产共享 base
-
-```text
-# hardware app_name app_version variant stages
-nvidia comfyui 0.22.0 comfyui-service-cuda124 base
-```
-
-说明：当前 `base` 计划仍然借用一条 app 记录来定位对应 base，但矩阵里已经把 `base_ref` 写成了精确的 `cuda124_base`，不再只写粗粒度的 `cuda_base`。`base_test` 会用构建出的 base image 做 CUDA runtime 冒烟测试。
-
-### 示例 2：只生产一个 app
-
-```text
-# hardware app_name app_version variant stages
-nvidia comfyui 0.22.0 comfyui-service-cuda124 app
-```
-
-### 示例 3：一次生产多个 app
-
-```text
-# hardware app_name app_version variant stages
 nvidia comfyui 0.22.0 comfyui-service-cuda124 app
 nvidia llama_factory 0.9.0 llama-factory-cli-cuda124 app
 nvidia stable_diffusion 3.5 stable-diffusion-runtime-cuda124 app
 ```
 
-## 常用命令
-
-### 第一次应该怎么用
-
-你第一次拿到项目时，优先记住这两条命令：
-
-```bash
-make preview PLAN=你的plan.tsv
-make produce PLAN=你的plan.tsv
-```
-
-它们的区别非常重要：
-
-| 命令 | 是否真实生产镜像 | 会做什么 | 适合什么时候用 |
-| --- | --- | --- | --- |
-| `make preview` | 不会 | 编译 `matrix-ci`，读取 plan，生成 Argo YAML，打印将要执行的 `kubectl` 命令 | 提交产线前检查计划是否正确 |
-| `make produce` | 会 | 编译、测试、打包 context、上传 MinIO、创建 Argo Workflow、等待阶段结果 | 确认无误后正式生产 |
-
-简单说：
+当前 stage 展开规则：
 
 ```text
-preview = 演练，不真的干活
-produce = 正式提交产线，真的开始构建镜像
+base -> base_image -> base_test
+app  -> app_image  -> app_test
 ```
 
-`OUT_DIR` 不需要手写。程序会自动把生成物放到：
+注意：`app` 不再自动携带 `base`。如果 app 依赖的 base 还没有生产过，需要先显式跑一行 `base`。
+
+当前还有一个设计债务：`base` 行仍然需要填写 `app_name / app_version / variant`。原因是程序现在仍通过 app variant 反查 `base_ref`，从而知道要生产哪一个 base。后续可以升级为更直观的 base plan 语法，例如直接声明 `cuda124_base`。
+
+## TSV 与矩阵的关系
+
+以这一行为例：
+
+```tsv
+nvidia comfyui 0.22.0 comfyui-service-cuda124 app
+```
+
+程序会按下面的路径查找：
 
 ```text
-dist/<plan文件名去掉.tsv>
+TSV hardware = nvidia
+TSV app_name = comfyui
+TSV app_version = 0.22.0
+TSV variant = comfyui-service-cuda124
+        ↓
+images-matrix.yaml / application_matrix
+        ↓
+找到 base_ref = cuda124_base
+        ↓
+images-matrix.yaml / base_image_matrix / cuda124_base
+        ↓
+找到 source + upstream_tag + tag_suffix
+        ↓
+生成 Dockerfile 路径、目标镜像名和 Kaniko build args
 ```
 
-例如：
+最终会得到：
 
 ```text
-PLAN=batch-plan.nvidia-cuda.practical-3apps.tsv
-OUT_DIR=dist/batch-plan.nvidia-cuda.practical-3apps
+app Dockerfile:
+dockerfiles/app_image/nvidia/comfyui/0.22.0/comfyui-service-cuda124/Dockerfile
+
+app BASE_IMAGE:
+172.20.47.182:5000/k8ace/cuda124_base-cuda12.4-devel-ubuntu22.04
+
+app destination:
+172.20.47.182:5000/k8ace/comfyui0.22.0-nvidia-comfyui-service-cuda124-dev
 ```
 
-### 查看 Makefile 帮助
+一句话：TSV 负责“点菜”，矩阵负责“解释菜名”，Dockerfile 负责“真正做菜”。
+
+## Makefile 常用命令
+
+查看帮助：
 
 ```bash
 make help
 ```
 
-这个命令会打印当前默认的 `PLAN`、`MATRIX`、`OUT_DIR`、`UPLOAD_DEST`。
-
-### 预演某个 plan
+编译 CLI：
 
 ```bash
-make preview PLAN=你的plan.tsv
+make build
 ```
 
-`preview` 会做这些事：
-
-1. 编译 `./bin/matrix-ci`
-2. 读取 `PLAN`
-3. 读取 `images-matrix.yaml`
-4. 生成 WorkflowTemplate/Workflow YAML 到 `OUT_DIR`
-5. 打印将要执行的 `kubectl apply/create` 命令
-
-`preview` 不会做这些事：
-
-1. 不打包 `context.tar.gz`
-2. 不上传 MinIO
-3. 不创建真实 Argo Workflow
-4. 不启动 Kaniko Pod
-5. 不生产镜像
-
-### 按某个 plan 正式生产
+运行测试：
 
 ```bash
-make produce PLAN=你的plan.tsv
+make test
 ```
 
-`produce` 会完整执行生产链：
-
-```text
-build -> test -> package -> upload -> create
-```
-
-对应含义是：
-
-| 步骤 | Make target | 作用 |
-| --- | --- | --- |
-| 编译工具 | `build` | 编译 `./bin/matrix-ci` |
-| 本地自测 | `test` | 执行 Go 单元测试，确认程序逻辑没坏 |
-| 打包上下文 | `package` | 执行 `hack/package_context.sh`，生成 `dist/context/context.tar.gz` |
-| 上传 MinIO | `upload` | 把 `context.tar.gz` 上传到 MinIO，供 Kaniko Pod 下载 |
-| 创建 Workflow | `create` | 生成 YAML，提交 Argo Workflow，并等待 `host_driver/base_test/app_test` 结果 |
-
-所以 `produce` 是正式生产命令。它会真的让 Argo/Kaniko 开始构建镜像。
-
-### 预演当前三应用 demo
-
-```bash
-make demo-preview
-```
-
-等价于：
+预演生产计划：
 
 ```bash
 make preview PLAN=batch-plan.nvidia-cuda.practical-3apps.tsv
 ```
 
-### 正式生产当前三应用 demo
+`preview` 会：
 
-```bash
-make demo
-```
+- 编译 `matrix-ci`
+- 读取 `PLAN`
+- 渲染 WorkflowTemplate / Workflow YAML
+- 打印将要执行的 `kubectl` 命令
 
-等价于：
+`preview` 不会：
+
+- 上传 MinIO
+- 创建真实 Argo Workflow
+- 构建镜像
+
+正式生产：
 
 ```bash
 make produce PLAN=batch-plan.nvidia-cuda.practical-3apps.tsv
 ```
 
-### 单独生产共享 base
+`produce` 会执行：
+
+```text
+go build
+-> go test
+-> bash hack/package_context.sh
+-> mc cp dist/context/context.tar.gz 到 MinIO
+-> matrix-ci batch 渲染 Argo YAML
+-> kubectl apply WorkflowTemplate
+-> kubectl create Workflow
+-> 等待 Workflow 结束并打印阶段摘要
+```
+
+当前 demo 快捷命令：
 
 ```bash
+make demo-preview
+make demo
+```
+
+只生产 CUDA 12.4 base：
+
+```bash
+make base-preview
 make base-produce
 ```
 
-等价于：
+## 完整生产流程
 
-```bash
-make produce PLAN=batch-plan.nvidia-cuda.base12.4.tsv
-```
-
-### 只做底层调试时才需要的命令
-
-```bash
-make build
-make test
-make package
-make upload
-```
-
-这些命令一般不是普通使用者入口：
-
-| 命令 | 作用 | 是否常用 |
-| --- | --- | --- |
-| `make build` | 只编译 `matrix-ci` | 调试 Go 代码时用 |
-| `make test` | 只跑 Go 单元测试 | 改代码后用 |
-| `make package` | 只打包 context | 检查构建上下文时用 |
-| `make upload` | 打包并上传 context 到 MinIO | 检查 MinIO/context 链路时用 |
-| `make render` | 只生成 YAML，不提交 | 检查 Argo YAML 时用 |
-| `make apply` | 只提交 WorkflowTemplate，不创建 Workflow | Argo 模板调试时用 |
-| `make create` | 创建 Workflow 并等待结果，但不自动打包/上传 context | 已确认 context 最新时用 |
-
-## matrix-ci 和 Makefile 的角色
-
-使用者优先使用 Makefile：
-
-```bash
-make produce PLAN=你的plan.tsv
-```
-
-`matrix-ci batch` 是 Makefile 内部调用的底层命令：
-
-```bash
-./bin/matrix-ci batch \
-  --plan ./batch-plan.nvidia-cuda.practical-3apps.tsv \
-  --matrix ./images-matrix.yaml \
-  --out-dir ./dist/batch-plan.nvidia-cuda.practical-3apps \
-  --create
-```
-
-`matrix-ci batch` 实际做的事情是：
-
-1. 读取 `plan`
-2. 读取 `matrix`
-3. 把目标解析成内部构建单元
-4. 生成 Argo WorkflowTemplate
-5. 根据参数执行 `kubectl apply/create`
-6. 默认等待 Workflow 结束，并输出 `host_driver/base_test/app_test` 等关键阶段的反馈
-
-如果 `host_driver` 失败，后续不会继续；如果 `base_test` 失败，说明 base image 不达标，后续 app 生产也会被取消；如果 `app_test` 失败，说明镜像已经构建出来但应用级冒烟没有通过。三者都会在命令行摘要中直接显示。
-
-Makefile 额外负责固定前置步骤：
+当前可运行链路如下：
 
 ```text
-build -> test -> package -> upload -> matrix-ci batch --create
+1. 编写或确认 Dockerfile
+2. 在 images-matrix.yaml 登记 app/base 关系
+3. 编写 batch-plan.tsv
+4. make preview PLAN=...
+5. make produce PLAN=...
+6. hack/package_context.sh 打包仓库
+7. 上传 context.tar.gz 到 MinIO
+8. matrix-ci 生成 Argo WorkflowTemplate / Workflow
+9. Argo 创建 Kaniko Pod
+10. Kaniko 从 MinIO 下载 context
+11. Kaniko 按 Dockerfile 构建镜像
+12. 镜像推送到本地 Registry
+13. Argo 启动 test 阶段做冒烟测试
 ```
 
-## Smoke 测试
+当前 MinIO 只保存构建上下文：
 
-当前 `hack/test/smoke.sh` 保留三层：
+```text
+s3://kaniko-contexts/k8ace/context.tar.gz
+```
 
-### L0
+最终镜像不保存在 MinIO，而是保存在本地 Registry：
 
-固定检查基础环境：
+```text
+172.20.47.182:5000/k8ace/...
+```
 
-- `python3`
-- `pip`
+## 冒烟测试
 
-### L1
+当前冒烟测试是轻量检查，不做真实模型推理。
 
-当前 L1 采用“四分类 + 轻量验证”：
+`base_test` 当前检查：
 
-- `runtime`
-  - `import + version/关键类`
-- `cli`
-  - `--help` 或 `--version`
-- `service`
-  - `入口文件存在` 或 `关键模块 import`
-- `workspace`
-  - `主命令 version/help` 或 `关键模块 import`
+```bash
+python3 --version
+pip --version || pip3 --version
+```
 
-当前仓库已经实例化的 3 个样本：
+`app_test` 会执行镜像内的：
 
-- `comfyui` -> `service`
-  - `entrypoint` 存在
-  - `import folder_paths`
-- `llama_factory` -> `cli`
-  - `llamafactory-cli version` 或 `--help`
-- `stable_diffusion` -> `runtime`
-  - `diffusers.__version__`
-  - `StableDiffusion3Pipeline`
+```bash
+/opt/k8ace/hack/test/smoke.sh
+```
 
-完整分类见：
+当前实际渲染为 L1：
 
-- `docs/application-taxonomy.md`
+```bash
+bash /opt/k8ace/hack/test/smoke.sh L1 comfyui nvidia
+bash /opt/k8ace/hack/test/smoke.sh L1 llama_factory nvidia
+bash /opt/k8ace/hack/test/smoke.sh L1 stable_diffusion nvidia
+```
 
-### L2
+三个 app 的 L1 规则：
 
-当前 L2 只做到 NVIDIA CUDA runtime 级别，目标是覆盖所有 CUDA 镜像，而不是验证某个具体框架或模型。
+- `comfyui`: 检查 entrypoint 是否存在，并检查能否 `import folder_paths`。
+- `llama_factory`: 检查 `llamafactory-cli version` 或 `llamafactory-cli --help`。
+- `stable_diffusion`: 检查能否导入 `diffusers` 和 `StableDiffusion3Pipeline`。
 
-- 容器内 `nvidia-smi` 可用
-- 容器内能看到 GPU
-- 容器内能读取 NVIDIA driver version
-- 容器内能看到 `libcuda.so.1`
-- 容器内能看到 CUDA runtime 相关动态库，例如 `libcudart.so`
+L2 硬件级测试目前保留在脚本中，但 demo 阶段未启用。原因是 L2 需要 Kubernetes 节点具备完整 NVIDIA runtime / device plugin / GPU 资源声明。当前优先验证 Dockerfile -> Kaniko -> Registry 主链路。
 
-注意：
+## 本地 Registry 与 Web UI
 
-- L1 只做轻量冒烟
-- L2-runtime 不依赖 `torch`，也不会下载模型或跑推理
-- 真实 `docker run` 是否能直接落地，不算在当前 L2-runtime 里
+本地 Registry 配置目录：
 
-`host_driver` 和 L2-runtime 的区别：
+```bash
+cd /home/xuefeng/newimage/images/hack/local-registry
+```
 
-- `host_driver` 检查节点是否有资格跑目标 CUDA 镜像，例如驱动版本是否满足 `cuda-124`。
-- L2-runtime 检查构建出来的 app image 在容器内部是否真的能看到 CUDA 驱动链路。
+启动：
 
-## 当前三个应用的实际状态
+```bash
+docker compose up -d
+docker compose ps
+```
 
-### comfyui
+Registry API：
 
-- 已经属于可直接落地的服务镜像
-- 可直接 `docker run`
-- 已实测可返回 `HTTP 200`
+```bash
+curl http://127.0.0.1:5000/v2/_catalog
+```
 
-### llama_factory
+Registry Web UI：
 
-- 产线构建、推送、L1 smoke 已通过
-- 但默认 WebUI 直跑仍可能受依赖版本错位影响
-- 问题主要在应用依赖组合，不在 Kaniko 产线
+```text
+http://172.20.47.182:8088
+```
 
-### stable_diffusion
+如果要用 SSH 转发：
 
-- 当前是 `diffusers` 运行时镜像
-- 可 import、可用关键 pipeline
-- 但默认 `docker run` 不会自己起服务
-- 它现在不是成品服务镜像
+```powershell
+ssh -i "E:\rsa\id_rsa_2048" -L 8088:127.0.0.1:8088 xuefeng@172.20.47.182
+```
 
-## 当前边界
+然后本地打开：
 
-这套仓库当前明确不做这些事：
+```text
+http://127.0.0.1:8088
+```
 
-- 不自动生成所有 Dockerfile
-- 不试图用矩阵描述全部应用安装细节
-- 不把所有异构硬件同时拉进一条主线
+Web UI 可以查看仓库、tag 和 digest，也可以删除 tag。删除 tag 后不一定立刻释放磁盘空间，真正释放空间需要执行 garbage collect：
 
-它当前最适合做的事是：
+```bash
+cd /home/xuefeng/newimage/images/hack/local-registry
 
-**在已经有 Dockerfile 的前提下，稳定地把 host_driver/base/app/app_test 这条链跑通。**
+docker compose stop registry-ui
+docker compose stop registry
+docker compose run --rm registry registry garbage-collect /etc/docker/registry/config.yml
+docker compose up -d
+```
 
-## 已知设计债务
+## docker run 使用示例
 
-### 1. base plan 仍然借助 app 记录反推 base
+当前三个 app 镜像 tag 都是 `latest`。
 
-这在语义上不够干净，但当前可用。
+### ComfyUI
 
-### 2. stable_diffusion 仍然只是 runtime image
+ComfyUI 是 service image，可以直接启动 WebUI：
 
-如果后续要把它变成可交付服务镜像，需要先确定它的服务形态。
+```bash
+docker run --rm -it \
+  --gpus all \
+  -p 8188:8188 \
+  --name k8ace-comfyui \
+  172.20.47.182:5000/k8ace/comfyui0.22.0-nvidia-comfyui-service-cuda124-dev:latest
+```
 
-### 3. llama_factory 仍需要进一步 pin 依赖
+访问：
 
-构建成功不等于默认启动一定成功。
+```text
+http://172.20.47.182:8188
+```
 
-## 推荐工作方式
+如果 `8188` 被占用，可以换宿主机端口：
 
-后续扩 app 时，建议固定按这个顺序：
+```bash
+docker run --rm -it \
+  --gpus all \
+  -p 8190:8188 \
+  --name k8ace-comfyui-new \
+  172.20.47.182:5000/k8ace/comfyui0.22.0-nvidia-comfyui-service-cuda124-dev:latest
+```
 
-1. 查官方仓库 / 官方 Dockerfile / 官方安装文档
-2. 判断它属于：
-   - `runtime`
-   - `cli`
-   - `service`
-   - `workspace`
-3. 写 Dockerfile 和 entrypoint
-4. 在 `images-matrix.yaml` 中登记
-5. 写一条最小 `plan`
-6. 先执行 `make preview PLAN=你的plan.tsv`
-7. 再执行 `make produce PLAN=你的plan.tsv`
-8. 最后再做 `docker run` 落地验证
+访问：
 
-## 参考文档
+```text
+http://172.20.47.182:8190
+```
 
-- `docs/practical-app-dockerfile-sources.md`
-- `docs/application-taxonomy.md`
-- `docs/host-driver-check-research.md`
-- `hack/local-registry/README.md`
+### LLaMA-Factory
+
+查看帮助：
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  172.20.47.182:5000/k8ace/llama_factory0.9.0-nvidia-llama-factory-cli-cuda124-dev:latest \
+  --help
+```
+
+尝试启动 WebUI：
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  -p 7860:7860 \
+  --name k8ace-llamafactory \
+  172.20.47.182:5000/k8ace/llama_factory0.9.0-nvidia-llama-factory-cli-cuda124-dev:latest \
+  webui --host 0.0.0.0 --port 7860
+```
+
+访问：
+
+```text
+http://172.20.47.182:7860
+```
+
+### Stable Diffusion Runtime
+
+当前 Stable Diffusion 镜像是 runtime image，不是 WebUI service。它默认进入 Python 环境。
+
+启动：
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  --name k8ace-stable-diffusion \
+  172.20.47.182:5000/k8ace/stable_diffusion3.5-nvidia-stable-diffusion-runtime-cuda124-dev:latest
+```
+
+做 import 检查：
+
+```bash
+docker run --rm -it \
+  --gpus all \
+  172.20.47.182:5000/k8ace/stable_diffusion3.5-nvidia-stable-diffusion-runtime-cuda124-dev:latest \
+  -c "import diffusers; from diffusers import StableDiffusion3Pipeline; print('stable diffusion runtime ok')"
+```
+
+## 查看 Argo 状态
+
+查看 Workflow：
+
+```bash
+kubectl -n default get wf
+```
+
+查看某个 Workflow 的 Pod：
+
+```bash
+WF=<workflow-name>
+kubectl -n default get pods -l workflows.argoproj.io/workflow=$WF
+```
+
+查看日志：
+
+```bash
+POD=<pod-name>
+kubectl -n default logs $POD -c main --tail=120 -f
+```
+
+Argo Web UI 当前 NodePort：
+
+```text
+https://172.20.47.182:32097
+```
+
+如果用 SSH 转发：
+
+```powershell
+ssh -i "E:\rsa\id_rsa_2048" -L 2746:127.0.0.1:32097 xuefeng@172.20.47.182
+```
+
+本地访问：
+
+```text
+https://127.0.0.1:2746
+```
+
+Argo 登录 token 需要带 `Bearer` 前缀：
+
+```bash
+kubectl -n argo create token argo-server --duration=24h | sed 's/^/Bearer /'
+```
+
+## 常见问题
+
+### 1. docker run 提示端口被占用
+
+报错示例：
+
+```text
+Bind for 0.0.0.0:8188 failed: port is already allocated
+```
+
+查看占用：
+
+```bash
+sudo ss -lntp | grep ':8188'
+docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}'
+```
+
+解决方式：
+
+- 停掉旧容器。
+- 或者换一个宿主机端口，例如 `-p 8190:8188`。
+
+### 2. Kaniko 长时间停在 Taking snapshot
+
+这通常不是 Argo 调度失败，也不是 CPU 没用上，而是 Kaniko 在扫描文件系统、计算层差异。
+
+常见原因：
+
+- Dockerfile 中 pip install 后又执行多个小 `RUN/COPY/chmod`。
+- 大量 Python 包导致文件数量很多。
+- 多个 Kaniko Pod 同时 snapshot，互相抢磁盘 IO。
+
+优化方向：
+
+- 合并 Dockerfile 中的 `RUN`。
+- 把小文件 `COPY` 和 `chmod` 尽量放到大安装步骤之前。
+- 降低 app image 并发。
+- 后续可评估 Kaniko `--snapshot-mode=redo`。
+
+### 3. Argo token not valid
+
+Argo UI 登录时 token 必须带 `Bearer` 前缀：
+
+```bash
+kubectl -n argo create token argo-server --duration=24h | sed 's/^/Bearer /'
+```
+
+### 4. DaoCloud / Docker Hub / 代理链路
+
+当前 base image 使用 DaoCloud 显式前缀：
+
+```text
+m.daocloud.io/docker.io/nvidia/cuda:12.4.1-devel-ubuntu22.04
+```
+
+服务器 Mihomo 中已将 DaoCloud 相关域名设置为 `DIRECT`，避免走被限速的代理节点：
+
+```text
+m.daocloud.io
+daocloud.io
+image-mirror.r2.daocloud.vip
+daocloud.vip
+```
+
+其他外部链路仍可通过代理访问，例如 GitHub、PyPI、Docker Hub token 等。
+
+## 当前已知取舍
+
+- `host_driver` 暂时屏蔽，避免 demo 被 Kubernetes GPU device plugin 等基础设施问题卡住。
+- `base` 和 `app` 分开写 plan，避免多个 app 重复构建共享 base。
+- `base` 行仍需借助 app variant 反查 `base_ref`，这是当前设计债务。
+- 冒烟测试只做 L1，不做真实模型推理。
+- Stable Diffusion 当前是 runtime image，不是 WebUI image。
+- Registry Web UI 可删除 tag，但释放空间仍需 garbage collect。
+
+## 推荐日常流程
+
+```text
+1. 写好或修改 Dockerfile
+2. 在 images-matrix.yaml 登记 app/base 关系
+3. 写 batch-plan.tsv
+4. make preview PLAN=xxx.tsv
+5. make produce PLAN=xxx.tsv
+6. 在 Argo 查看构建状态
+7. 在 Registry Web UI 查看产物
+8. 用 docker run 做落地测试
+```
+
+当前三应用 demo：
+
+```bash
+cd /home/xuefeng/newimage/images
+make preview PLAN=batch-plan.nvidia-cuda.practical-3apps.tsv
+make produce PLAN=batch-plan.nvidia-cuda.practical-3apps.tsv
+```

@@ -230,10 +230,16 @@ func buildBaseSourceImage(source string, baseVar matrix.BaseVariant) string {
 	if tagSuffix == "" {
 		return source
 	}
-	if !upstreamOverride && strings.Contains(source, ":") {
+	if !upstreamOverride && imageRefHasExplicitTag(source) {
 		return source
 	}
 	return source + ":" + tagSuffix
+}
+
+func imageRefHasExplicitTag(ref string) bool {
+	lastSlash := strings.LastIndex(ref, "/")
+	lastColon := strings.LastIndex(ref, ":")
+	return lastColon > lastSlash
 }
 
 func resolvePlaceholders(s, version string, base matrix.BaseVariant) (string, error) {

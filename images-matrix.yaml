@@ -56,9 +56,11 @@ base_image_matrix:
   # application_matrix 中依赖 CUDA 12.4 的应用，都应显式写 base_ref: "cuda124_base"。
   cuda124_base:
     # source 是当前 base 的上游来源。
-    # 这里没有直接写 nvidia/cuda，而是写本地 Registry 里的 upstream 镜像。
-    # 这样做的好处是：Kaniko 构建时优先从本地仓库拉取，减少 Docker Hub 网络波动。
-    source: "172.20.47.182:5000/k8ace/upstream/nvidia-cuda"
+    # base image 是项目自己的基础环境层，但它仍然必须 FROM 一个上游父镜像。
+    # 当前采用 DaoCloud public-image-mirror 的显式前缀方式：
+    # docker.io/nvidia/cuda -> m.daocloud.io/docker.io/nvidia/cuda。
+    # 这样不需要维护本地 upstream seed，也能避开直接访问 Docker Hub 的不稳定链路。
+    source: "m.daocloud.io/docker.io/nvidia/cuda"
 
     # variants 表示同一种 base_ref 下的具体镜像版本。
     variants:
@@ -67,7 +69,7 @@ base_image_matrix:
       - tag_suffix: "cuda12.4-devel-ubuntu22.04"
 
         # upstream_tag 是 source 对应的真实上游 tag。
-        # 当前等价于 nvidia/cuda:12.4.1-devel-ubuntu22.04 的版本语义。
+        # 当前等价于 docker.io/nvidia/cuda:12.4.1-devel-ubuntu22.04 的版本语义。
         upstream_tag: "12.4.1-devel-ubuntu22.04"
 
         # 以下字段主要用于人工理解和后续扩展。
