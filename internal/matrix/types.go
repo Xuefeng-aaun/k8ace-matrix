@@ -149,6 +149,7 @@ type AppVariant struct {
 	AppVersion         string            `yaml:"app_version"`
 	Runtime            string            `yaml:"runtime"`
 	Accelerator        string            `yaml:"accelerator"`
+	BaseTagSuffix      string            `yaml:"base_tag_suffix"`
 	BaseRef            string            `yaml:"base_ref"`
 	Hardware           []string          `yaml:"hardware"`
 	AdditionalPackages []string          `yaml:"additional_packages"`
@@ -269,6 +270,7 @@ func decodeAppVariantMap(m map[string]any) AppVariant {
 	v.AppVersion = firstString(m, "app_version", "version")
 	v.Runtime = firstString(m, "runtime")
 	v.Accelerator = firstString(m, "accelerator", "accelerator_version")
+	v.BaseTagSuffix = firstString(m, "base_tag_suffix", "base_tag")
 	v.BaseRef = firstString(m, "base_ref")
 	v.Hardware = stringList(m["hardware"])
 	v.AdditionalPackages = stringList(m["additional_packages"])
@@ -291,7 +293,7 @@ func decodeAppVariantMap(m map[string]any) AppVariant {
 		extra[k] = val
 	}
 	for _, key := range []string{
-		"name", "type", "app_type", "app_version", "version", "runtime", "accelerator", "accelerator_version",
+		"name", "type", "app_type", "app_version", "version", "runtime", "accelerator", "accelerator_version", "base_tag_suffix", "base_tag",
 		"base_ref", "hardware", "additional_packages", "build_args", "system_packages", "git_repo", "git_ref",
 		"app_root", "venv", "requirements_file", "entrypoint", "ports", "env", "volumes",
 	} {
