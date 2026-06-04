@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"k8ace-matrix/internal/matrix"
 	"k8ace-matrix/internal/pipeline"
 )
 
@@ -17,6 +18,7 @@ type Options struct {
 	ContextEnv              []EnvVar
 	RegistryMirrors         []string
 	InsecureRegistries      []string
+	Kaniko                  matrix.ArgoKanikoConfig
 	SkipPushPermissionCheck bool
 	RegistrySecretName      string
 	Labels                  map[string]string
@@ -44,7 +46,7 @@ func BuildWorkflowYAML(p *pipeline.Plan, opt Options) ([]byte, error) {
 			},
 		},
 	}
-	templates = append(templates, taskTemplates(p.Tasks, opt.ContextEnv, opt.RegistrySecretName, opt.RegistryMirrors, opt.InsecureRegistries, opt.SkipPushPermissionCheck)...)
+	templates = append(templates, taskTemplates(p.Tasks, opt.ContextEnv, opt.RegistrySecretName, opt.RegistryMirrors, opt.InsecureRegistries, opt.Kaniko, opt.SkipPushPermissionCheck)...)
 
 	spec := WorkflowSpec{
 		Entrypoint:         "main",
@@ -94,7 +96,7 @@ func dagTasks(p *pipeline.Plan) []DAGTask {
 	return out
 }
 
-func taskTemplates(tasks []pipeline.Task, contextEnv []EnvVar, registrySecretName string, registryMirrors []string, insecureRegistries []string, skipPushPermissionCheck bool) []Template {
+func taskTemplates(tasks []pipeline.Task, contextEnv []EnvVar, registrySecretName string, registryMirrors []string, insecureRegistries []string, kanikoConfig matrix.ArgoKanikoConfig, skipPushPermissionCheck bool) []Template {
 	mounts := kanikoVolumeMounts(registrySecretName)
 
 	out := make([]Template, 0, len(tasks))
@@ -121,7 +123,7 @@ func taskTemplates(tasks []pipeline.Task, contextEnv []EnvVar, registrySecretNam
 				Command: []string{
 					"/kaniko/executor",
 				},
-				Args:         buildKanikoCommandArgs(task.Kaniko, registryMirrors, insecureRegistries, skipPushPermissionCheck, contextEnv),
+				Args:         buildKanikoCommandArgs(task.Kaniko, registryMirrors, insecureRegistries, kanikoConfig, skipPushPermissionCheck, contextEnv),
 				Env:          cloneEnvVars(contextEnv),
 				VolumeMounts: mounts,
 			},
@@ -244,23 +246,24 @@ func kanikoVolumeMounts(registrySecretName string) []VolumeMount {
 	}
 }
 
-func buildKanikoCommandArgs(k pipeline.KanikoSpec, registryMirrors []string, insecureRegistries []string, skipPushPermissionCheck bool, contextEnv []EnvVar) []string {
+func buildKanikoCommandArgs(k pipeline.KanikoSpec, registryMirrors []string, insecureRegistries []string, kanikoConfig matrix.ArgoKanikoConfig, skipPushPermissionCheck bool, contextEnv []EnvVar) []string {
 	args := []string{
 		"--context=" + k.ContextDir,
 		"--dockerfile=" + k.Dockerfile,
 		"--destination=" + k.Destination,
 	}
-	args = append(args, buildKanikoArgs(k, registryMirrors, insecureRegistries, skipPushPermissionCheck)...)
+	args = append(args, buildKanikoArgs(k, registryMirrors, insecureRegistries, kanikoConfig, skipPushPermissionCheck)...)
 	args = append(args, buildProxyBuildArgs(k.BuildArgs, contextEnv)...)
 	return args
 }
 
-func buildKanikoArgs(k pipeline.KanikoSpec, registryMirrors []string, insecureRegistries []string, skipPushPermissionCheck bool) []string {
+func buildKanikoArgs(k pipeline.KanikoSpec, registryMirrors []string, insecureRegistries []string, kanikoConfig matrix.ArgoKanikoConfig, skipPushPermissionCheck bool) []string {
 	var args []string
 
 	if k.Cache.Enabled {
 		args = append(args, "--cache=true")
 	}
+	args = append(args, buildKanikoSnapshotArgs(kanikoConfig)...)
 	if skipPushPermissionCheck {
 		args = append(args, "--skip-push-permission-check")
 	}
@@ -280,6 +283,28 @@ func buildKanikoArgs(k pipeline.KanikoSpec, registryMirrors []string, insecureRe
 	sort.Strings(keys)
 	for _, key := range keys {
 		args = append(args, "--build-arg="+key+"="+k.BuildArgs[key])
+	}
+
+	return args
+}
+
+func buildKanikoSnapshotArgs(config matrix.ArgoKanikoConfig) []string {
+	var args []string
+
+	if mode := strings.TrimSpace(config.SnapshotMode); mode != "" {
+		args = append(args, "--snapshot-mode="+mode)
+	}
+	if config.SingleSnapshot {
+		args = append(args, "--single-snapshot")
+	}
+	if config.UseNewRun {
+		args = append(args, "--use-new-run")
+	}
+	if config.Cleanup {
+		args = append(args, "--cleanup")
+	}
+	if config.Reproducible {
+		args = append(args, "--reproducible")
 	}
 
 	return args

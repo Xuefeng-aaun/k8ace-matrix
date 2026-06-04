@@ -5,5 +5,5 @@ nvidia comfyui 0.22.0 comfyui-service-cuda124 base
 
 # 再生产三个 app。app 阶段不再自动重复生产 base。
 nvidia comfyui 0.22.0 comfyui-service-cuda124 app
-nvidia llama_factory 0.9.0 llama-factory-cli-cuda124 app
+nvidia llama_factory 0.9.0 llama-factory-service-cuda124 app
 nvidia stable_diffusion 3.5 stable-diffusion-runtime-cuda124 app

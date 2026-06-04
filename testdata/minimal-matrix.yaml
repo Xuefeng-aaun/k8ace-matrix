@@ -48,6 +48,7 @@ base_image_matrix:
 application_matrix:
   deep_learning:
     pytorch:
+      type: "runtime"
       versions: ["2.5.1"]
       variants:
         - name: "pytorch-cuda"

@@ -14,7 +14,12 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/opt/comfyui \
     K8ACE_HACK_ROOT=/opt/k8ace/hack \
     PORT=8188 \
-    LISTEN=0.0.0.0
+    LISTEN=0.0.0.0 \
+    K8ACE_SMOKE_TYPE=service \
+    K8ACE_SMOKE_SERVICE_CMD=/opt/k8ace/hack/images/comfyui/entrypoint.sh \
+    K8ACE_SMOKE_PORT=8188 \
+    K8ACE_SMOKE_HEALTH_PATH=/ \
+    K8ACE_SMOKE_TIMEOUT_SECONDS=180
 
 RUN python3 -m pip install --upgrade pip && \
     python3 -m pip install \
@@ -25,7 +30,8 @@ RUN python3 -m pip install --upgrade pip && \
     git clone --depth 1 --branch v0.22.0 https://github.com/comfy-org/ComfyUI.git ${COMFYUI_ROOT} && \
     python3 -m pip install \
       --index-url https://pypi.org/simple \
-      -r ${COMFYUI_ROOT}/requirements.txt
+      -r ${COMFYUI_ROOT}/requirements.txt && \
+    python3 -m pip check
 
 RUN mkdir -p /opt/k8ace/hack/test /opt/k8ace/hack/lib /opt/k8ace/hack/images/comfyui
 COPY hack/test/smoke.sh /opt/k8ace/hack/test/smoke.sh

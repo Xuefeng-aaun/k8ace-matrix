@@ -242,6 +242,7 @@ func renderBatchRow(
 			ContextEnv:              contextEnv,
 			RegistryMirrors:         aw.RegistryMirrors,
 			InsecureRegistries:      aw.InsecureRegistries,
+			Kaniko:                  aw.Kaniko,
 			SkipPushPermissionCheck: aw.SkipPushPermissionCheck,
 			RegistrySecretName:      registrySecretName,
 			Labels:                  labelsFromCSV(labels),

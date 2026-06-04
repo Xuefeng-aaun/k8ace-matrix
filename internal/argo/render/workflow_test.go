@@ -52,6 +52,8 @@ func TestBuildWorkflowYAML_Golden(t *testing.T) {
 
 	got, err := BuildWorkflowYAML(p, Options{
 		Kind:                    "workflowtemplate",
+		Namespace:               "default",
+		ServiceAccountName:      "argo-workflow",
 		ContextEnv:              contextEnv,
 		InsecureRegistries:      m.CICD.ArgoWorkflows.InsecureRegistries,
 		SkipPushPermissionCheck: m.CICD.ArgoWorkflows.SkipPushPermissionCheck,
@@ -177,5 +179,50 @@ func TestBuildWorkflowYAML_RendersInsecureRegistries(t *testing.T) {
 	out := string(got)
 	if count := strings.Count(out, "--insecure-registry=registry.local:5000"); count != 1 {
 		t.Fatalf("insecure registry arg count = %d, want 1\n%s", count, out)
+	}
+}
+
+func TestBuildWorkflowYAML_RendersKanikoSnapshotOptions(t *testing.T) {
+	p := &pipeline.Plan{
+		Name: "demo",
+		Tasks: []pipeline.Task{
+			{
+				Name:  "app",
+				Stage: "app_image",
+				Kaniko: pipeline.KanikoSpec{
+					Image:       "kaniko:test",
+					ContextDir:  "s3://bucket/context.tar.gz",
+					Dockerfile:  "dockerfiles/app/Dockerfile",
+					Destination: "registry.local:5000/k8ace/app:dev",
+				},
+			},
+		},
+	}
+
+	got, err := BuildWorkflowYAML(p, Options{
+		Kind: "workflowtemplate",
+		Kaniko: matrix.ArgoKanikoConfig{
+			SnapshotMode:   "redo",
+			SingleSnapshot: true,
+			UseNewRun:      true,
+			Cleanup:        true,
+			Reproducible:   true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	out := string(got)
+	for _, want := range []string{
+		"--snapshot-mode=redo",
+		"--single-snapshot",
+		"--use-new-run",
+		"--cleanup",
+		"--reproducible",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("rendered workflow missing %q:\n%s", want, out)
+		}
 	}
 }

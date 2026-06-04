@@ -54,6 +54,7 @@ type ArgoWorkflows struct {
 	SubmitModeDefault       string           `yaml:"submit_mode_default"`
 	ArgoServer              string           `yaml:"argo_server"`
 	KanikoImage             string           `yaml:"kaniko_image"`
+	Kaniko                  ArgoKanikoConfig `yaml:"kaniko"`
 	Parallelism             int              `yaml:"parallelism"`
 	RegistryMirrors         []string         `yaml:"registry_mirrors"`
 	InsecureRegistries      []string         `yaml:"insecure_registries"`
@@ -61,6 +62,14 @@ type ArgoWorkflows struct {
 	BuildContext            ArgoBuildContext `yaml:"build_context"`
 	RegistrySecret          string           `yaml:"registry_secret_name"`
 	Cache                   ArgoCacheConfig  `yaml:"cache"`
+}
+
+type ArgoKanikoConfig struct {
+	SnapshotMode   string `yaml:"snapshot_mode"`
+	SingleSnapshot bool   `yaml:"single_snapshot"`
+	UseNewRun      bool   `yaml:"use_new_run"`
+	Cleanup        bool   `yaml:"cleanup"`
+	Reproducible   bool   `yaml:"reproducible"`
 }
 
 type ArgoCacheConfig struct {

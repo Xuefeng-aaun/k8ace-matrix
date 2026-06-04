@@ -94,8 +94,8 @@ func TestBuildPlansAppTestStageRunsSmokeHelperWhenAvailable(t *testing.T) {
 	if !strings.Contains(testTask.TestCommands[0], "/opt/k8ace/hack/test/smoke.sh") {
 		t.Fatalf("app_test command should call smoke helper, got %q", testTask.TestCommands[0])
 	}
-	if !strings.Contains(testTask.TestCommands[0], "L1 demo nvidia") {
-		t.Fatalf("app_test command should pass app+hardware to smoke helper, got %q", testTask.TestCommands[0])
+	if !strings.Contains(testTask.TestCommands[0], "'L3' 'demo' 'nvidia' 'runtime'") {
+		t.Fatalf("app_test command should pass level+app+hardware+type to smoke helper, got %q", testTask.TestCommands[0])
 	}
 	if len(testTask.TestResourceLimits) != 0 || len(testTask.TestResourceRequests) != 0 {
 		t.Fatalf("app_test should not request GPU resources in demo mode")
@@ -269,6 +269,7 @@ func testMatrix() *matrix.Matrix {
 		ApplicationMatrix: matrix.ApplicationMatrix{
 			"demo": {
 				"demo": {
+					Type:     "runtime",
 					Versions: []string{"1.0.0"},
 					Variants: []matrix.AppVariant{
 						{

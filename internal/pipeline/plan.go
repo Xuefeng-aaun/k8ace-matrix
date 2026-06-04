@@ -422,13 +422,10 @@ func buildStageTask(
 		}
 		task.Kaniko.BuildArgs["BASE_IMAGE"] = u.BaseImageDest
 	case "app_test":
-		smokeLevel := "L2"
-		if !demoHardwareValidationEnabled {
-			smokeLevel = "L1"
-		}
+		smokeLevel := "L3"
 		task.TestImage = u.AppImageDest
 		task.TestCommands = []string{
-			fmt.Sprintf("if [ -f /opt/k8ace/hack/test/smoke.sh ]; then bash /opt/k8ace/hack/test/smoke.sh %s %s %s; else python3 --version && (pip list --format=columns 2>/dev/null || pip3 list --format=columns 2>/dev/null || true); fi", smokeLevel, u.AppName, u.Hardware),
+			fmt.Sprintf("if [ -f /opt/k8ace/hack/test/smoke.sh ]; then bash /opt/k8ace/hack/test/smoke.sh %s %s %s %s; else python3 --version && (pip list --format=columns 2>/dev/null || pip3 list --format=columns 2>/dev/null || true); fi", shellQuote(smokeLevel), shellQuote(u.AppName), shellQuote(u.Hardware), shellQuote(u.AppType)),
 		}
 		applyTestResources(&task, u)
 		task.Kaniko.Image = u.AppImageDest

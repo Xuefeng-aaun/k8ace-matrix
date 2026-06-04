@@ -118,4 +118,7 @@ application_matrix:
 	if unit.AppImageDest != "k8ace/comfyui0.22.0-nvidia-comfyui-service-cuda124-dev" {
 		t.Fatalf("AppImageDest = %q", unit.AppImageDest)
 	}
+	if unit.AppType != "service" {
+		t.Fatalf("AppType = %q, want service", unit.AppType)
+	}
 }

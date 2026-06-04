@@ -2,8 +2,10 @@ apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:
     name: k8ace-matrix-nvidia
+    namespace: default
 spec:
     entrypoint: main
+    serviceAccountName: argo-workflow
     templates:
         - name: main
           dag:
@@ -120,7 +122,7 @@ spec:
                   echo '[app_test] task=app-test-nvidia-pytorch-2-5-1-pytorch-cuda image=172.20.47.182:5000/k8ace/pytorch2.5.1-nvidia-pytorch-cuda-dev';
                   echo '[app_test] running check 1';
                   (
-                  if [ -f /opt/k8ace/hack/test/smoke.sh ]; then bash /opt/k8ace/hack/test/smoke.sh L1 pytorch nvidia; else python3 --version && (pip list --format=columns 2>/dev/null || pip3 list --format=columns 2>/dev/null || true); fi
+                  if [ -f /opt/k8ace/hack/test/smoke.sh ]; then bash /opt/k8ace/hack/test/smoke.sh 'L3' 'pytorch' 'nvidia' 'runtime'; else python3 --version && (pip list --format=columns 2>/dev/null || pip3 list --format=columns 2>/dev/null || true); fi
                   ) || { echo '[app_test] FAILED check 1'; exit 1; };
                   echo '[app_test] ALL PASSED';
     volumes:

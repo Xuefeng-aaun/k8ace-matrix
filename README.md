@@ -56,7 +56,7 @@ Dockerfile + images-matrix.yaml + batch-plan.tsv
 │   ├── base_image/nvidia/cuda124_base/cuda12.4-devel-ubuntu22.04/Dockerfile
 │   └── app_image/nvidia/
 │       ├── comfyui/0.22.0/comfyui-service-cuda124/Dockerfile
-│       ├── llama_factory/0.9.0/llama-factory-cli-cuda124/Dockerfile
+│       ├── llama_factory/0.9.0/llama-factory-service-cuda124/Dockerfile
 │       └── stable_diffusion/3.5/stable-diffusion-runtime-cuda124/Dockerfile
 ├── hack/
 │   ├── package_context.sh
@@ -178,7 +178,7 @@ hardware app_name app_version variant stages
 # hardware app_name app_version variant stages
 nvidia comfyui 0.22.0 comfyui-service-cuda124 base
 nvidia comfyui 0.22.0 comfyui-service-cuda124 app
-nvidia llama_factory 0.9.0 llama-factory-cli-cuda124 app
+nvidia llama_factory 0.9.0 llama-factory-service-cuda124 app
 nvidia stable_diffusion 3.5 stable-diffusion-runtime-cuda124 app
 ```
 
@@ -339,9 +339,44 @@ s3://kaniko-contexts/k8ace/context.tar.gz
 172.20.47.182:5000/k8ace/...
 ```
 
+## Dockerfile 编写细则
+
+当前 Dockerfile 的要求已经提高。它不再只是“能安装完依赖”，还必须带上可被产线自动验收的契约。
+
+每个 app Dockerfile 至少要满足：
+
+- 必须基于 `ARG BASE_IMAGE` / `FROM ${BASE_IMAGE}`，让产线可以把 app 构建在已生产的 base image 上。
+- 必须复制 `hack/test/smoke.sh` 到 `/opt/k8ace/hack/test/smoke.sh`。
+- service 镜像必须提供稳定启动入口，并声明服务契约环境变量。
+- runtime 镜像必须声明可 import 的关键包或自定义 runtime 检查命令。
+- cli 镜像必须声明可成功返回的版本或帮助命令。
+- Python 依赖安装后必须执行 `python3 -m pip check`，提前暴露依赖冲突。
+- 对上游依赖范围过宽的项目，要使用 constraints 文件固定关键依赖线，避免未来解析到不兼容新版本。
+
+三类契约示例：
+
+```dockerfile
+# service：必须能启动并被 curl 通。
+ENV K8ACE_SMOKE_TYPE=service \
+    K8ACE_SMOKE_SERVICE_CMD=/opt/k8ace/hack/images/comfyui/entrypoint.sh \
+    K8ACE_SMOKE_PORT=8188 \
+    K8ACE_SMOKE_HEALTH_PATH=/ \
+    K8ACE_SMOKE_TIMEOUT_SECONDS=180
+
+# runtime：必须能 import 关键包。
+ENV K8ACE_SMOKE_TYPE=runtime \
+    K8ACE_SMOKE_IMPORTS=torch,diffusers,transformers,accelerate
+
+# cli：必须有一个能成功返回的命令。
+ENV K8ACE_SMOKE_TYPE=cli \
+    K8ACE_SMOKE_CLI_CMD="some-cli --help"
+```
+
+LLaMA-Factory 这种 WebUI 应用现在按 service 镜像处理。它的 v0.9.0 依赖范围较宽，Dockerfile 中使用 `/tmp/llamafactory-constraints.txt` 固定 Gradio 4.x 稳定线，并用 `pip check` 检查依赖一致性。这样可以避免再次出现 Gradio 版本解析过新导致 WebUI 启动失败的问题。
+
 ## 冒烟测试
 
-当前冒烟测试是轻量检查，不做真实模型推理。
+当前冒烟测试不做真实模型推理，但会验证镜像是否能按交付类型最低可用。
 
 `base_test` 当前检查：
 
@@ -356,21 +391,27 @@ pip --version || pip3 --version
 /opt/k8ace/hack/test/smoke.sh
 ```
 
-当前实际渲染为 L1：
+当前实际渲染为 L3：
 
 ```bash
-bash /opt/k8ace/hack/test/smoke.sh L1 comfyui nvidia
-bash /opt/k8ace/hack/test/smoke.sh L1 llama_factory nvidia
-bash /opt/k8ace/hack/test/smoke.sh L1 stable_diffusion nvidia
+bash /opt/k8ace/hack/test/smoke.sh L3 comfyui nvidia service
+bash /opt/k8ace/hack/test/smoke.sh L3 llama_factory nvidia service
+bash /opt/k8ace/hack/test/smoke.sh L3 stable_diffusion nvidia runtime
 ```
 
-三个 app 的 L1 规则：
+当前三类规则：
 
-- `comfyui`: 检查 entrypoint 是否存在，并检查能否 `import folder_paths`。
-- `llama_factory`: 检查 `llamafactory-cli version` 或 `llamafactory-cli --help`。
-- `stable_diffusion`: 检查能否导入 `diffusers` 和 `StableDiffusion3Pipeline`。
+- `service`: 启动服务，等待端口可用，`curl` 健康地址成功。
+- `runtime`: 直接 import 关键 Python 包成功。
+- `cli`: 执行版本或帮助命令并成功返回。
 
-L2 硬件级测试目前保留在脚本中，但 demo 阶段未启用。原因是 L2 需要 Kubernetes 节点具备完整 NVIDIA runtime / device plugin / GPU 资源声明。当前优先验证 Dockerfile -> Kaniko -> Registry 主链路。
+当前三个 app 的规则：
+
+- `comfyui`: service，启动 8188 并 `curl /`。
+- `llama_factory`: service，启动 7860 并 `curl /`。
+- `stable_diffusion`: runtime，import `torch / diffusers / transformers / accelerate`，并导入 `StableDiffusion3Pipeline`。
+
+L2 硬件级测试目前仍保留为后续扩展，但 demo 阶段优先验证 Dockerfile -> Kaniko -> Registry -> app_test 主链路。
 
 ## 本地 Registry 与 Web UI
 
@@ -462,24 +503,14 @@ http://172.20.47.182:8190
 
 ### LLaMA-Factory
 
-查看帮助：
-
-```bash
-docker run --rm -it \
-  --gpus all \
-  172.20.47.182:5000/k8ace/llama_factory0.9.0-nvidia-llama-factory-cli-cuda124-dev:latest \
-  --help
-```
-
-尝试启动 WebUI：
+LLaMA-Factory 当前按 service image 交付，默认启动 WebUI：
 
 ```bash
 docker run --rm -it \
   --gpus all \
   -p 7860:7860 \
   --name k8ace-llamafactory \
-  172.20.47.182:5000/k8ace/llama_factory0.9.0-nvidia-llama-factory-cli-cuda124-dev:latest \
-  webui --host 0.0.0.0 --port 7860
+  172.20.47.182:5000/k8ace/llama_factory0.9.0-nvidia-llama-factory-service-cuda124-dev:latest
 ```
 
 访问：
@@ -627,7 +658,7 @@ daocloud.vip
 - `host_driver` 暂时屏蔽，避免 demo 被 Kubernetes GPU device plugin 等基础设施问题卡住。
 - `base` 和 `app` 分开写 plan，避免多个 app 重复构建共享 base。
 - `base` 行仍需借助 app variant 反查 `base_ref`，这是当前设计债务。
-- 冒烟测试只做 L1，不做真实模型推理。
+- 冒烟测试当前做到 L3：service 必须启动并 curl，runtime 必须 import，cli 必须命令返回；暂不做真实模型推理。
 - Stable Diffusion 当前是 runtime image，不是 WebUI image。
 - Registry Web UI 可删除 tag，但释放空间仍需 garbage collect。
 

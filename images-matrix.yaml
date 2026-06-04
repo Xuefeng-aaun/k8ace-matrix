@@ -138,19 +138,22 @@ application_matrix:
     # --------------------------------------------------------------------------
     # LLaMA-Factory
     # --------------------------------------------------------------------------
-    # 类型：cli
-    # 定位：训练/微调工具镜像。当前 L1 以 llamafactory-cli version/help 做轻量验收。
-    # 注意：默认 WebUI 直跑仍可能受到上游依赖版本组合影响。
+    # 类型：service
+    # 定位：可直接 docker run 落地的 LLaMA-Factory WebUI 服务镜像。
+    # 依赖策略：
+    # - v0.9.0 上游依赖对 Gradio 只给了较宽的下限，容易解析到未来不兼容版本。
+    # - Dockerfile 内部必须使用 constraints 固定 Gradio 4.x 稳定线，并执行 pip check。
+    # - app_test 必须启动 WebUI 并 curl 7860 成功，不能只跑 version/help。
     # Dockerfile 路径：
-    # dockerfiles/app_image/nvidia/llama_factory/0.9.0/llama-factory-cli-cuda124/Dockerfile
+    # dockerfiles/app_image/nvidia/llama_factory/0.9.0/llama-factory-service-cuda124/Dockerfile
     llama_factory:
-      type: "cli"
+      type: "service"
       versions:
         "0.9.0":
           runtimes:
             cuda:
               cuda-124:
-                name: "llama-factory-cli-cuda124"
+                name: "llama-factory-service-cuda124"
                 base_ref: "cuda124_base"
                 hardware: ["nvidia"]
 
@@ -268,7 +271,7 @@ build_args_overrides:
 priority_build_list:
   practical:
     - "k8ace/comfyui0.22.0-nvidia-comfyui-service-cuda124-dev"
-    - "k8ace/llama_factory0.9.0-nvidia-llama-factory-cli-cuda124-dev"
+    - "k8ace/llama_factory0.9.0-nvidia-llama-factory-service-cuda124-dev"
     - "k8ace/stable_diffusion3.5-nvidia-stable-diffusion-runtime-cuda124-dev"
 
 # ==============================================================================
@@ -316,6 +319,26 @@ ci_cd:
     # Kaniko executor 镜像版本。
     # 如果未来拉取 gcr.io 不稳定，可以考虑提前同步到本地 Registry。
     kaniko_image: "gcr.io/kaniko-project/executor:v1.23.2"
+
+    # Kaniko 快照策略。
+    # 这个配置用于降低 AI 镜像构建时长时间停在 Taking snapshot 的概率。
+    #
+    # snapshot_mode=redo:
+    #   不再做最重的 full 文件内容检查，改用 mtime/size/mode/uid/gid 判断变化。
+    #   对 apt/pip/git clone 这类大目录写入场景通常更快，风险比 time 模式更低。
+    #
+    # single_snapshot=true:
+    #   不在每个 RUN 之后都生成镜像层，而是在 Dockerfile 末尾做一次最终快照。
+    #   当前项目 Kaniko cache 关闭，AI app 镜像也更关注最终产物可用性，所以这是
+    #   demo 阶段更合适的取舍。后续如果强依赖逐层缓存，可以改回 false。
+    #
+    # use_new_run:
+    #   Kaniko 的实验性 RUN 检测方式，速度更快但漏文件风险更高，当前先不启用。
+    kaniko:
+      snapshot_mode: "redo"
+      single_snapshot: true
+      use_new_run: false
+      cleanup: true
 
     # Workflow 内部并发度。
     # 当前设置为 2，避免同时启动过多 Kaniko Pod 给控制面和网络造成压力。

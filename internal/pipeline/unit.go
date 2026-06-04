@@ -9,6 +9,7 @@ import (
 
 type BuildUnit struct {
 	Hardware        string
+	AppType         string
 	AppName         string
 	AppVersion      string
 	VariantName     string
@@ -143,8 +144,14 @@ func DeriveUnits(m *matrix.Matrix, sel Selection) ([]BuildUnit, error) {
 						buildArgs[k] = resolved
 					}
 
+					appType := strings.TrimSpace(v.AppType)
+					if appType == "" {
+						appType = strings.TrimSpace(appDef.Type)
+					}
+
 					units = append(units, BuildUnit{
 						Hardware:           hw,
+						AppType:            appType,
 						AppName:            spec.Name,
 						AppVersion:         ver,
 						VariantName:        v.Name,

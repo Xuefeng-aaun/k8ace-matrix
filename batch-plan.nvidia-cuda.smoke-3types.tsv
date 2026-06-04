@@ -1,0 +1,27 @@
+# NVIDIA CUDA 冒烟测试生产计划
+#
+# 一行格式：
+# hardware app_name app_version variant stages
+#
+# 本计划覆盖当前最重要的交付类型：
+# - service：comfyui，验收规则是启动服务并 curl 成功。
+# - runtime：stable_diffusion，验收规则是 import 关键 Python 包成功。
+# - service：llama_factory，验收规则是启动 WebUI 并 curl 成功。
+#
+# cli 模板仍保留在 hack/test/smoke.sh 中；后续加入真正 CLI 交付镜像时，
+# 再把对应 app 放进本计划或新计划。
+#
+# base 仍通过 app variant 反查 base_ref，这是当前项目的保守设计债务。
+# 因此先使用 comfyui 这一行生产 cuda124_base，再生产三个 app。
+
+# 共享 CUDA 12.4 base image。
+nvidia comfyui 0.22.0 comfyui-service-cuda124 base
+
+# service：必须启动并 curl 成功。
+nvidia comfyui 0.22.0 comfyui-service-cuda124 app
+
+# runtime：直接 import 关键依赖成功。
+nvidia stable_diffusion 3.5 stable-diffusion-runtime-cuda124 app
+
+# service：必须启动 WebUI 并 curl 7860 成功。
+nvidia llama_factory 0.9.0 llama-factory-service-cuda124 app
